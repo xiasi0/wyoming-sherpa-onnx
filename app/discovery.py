@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import socket
 from dataclasses import dataclass, field
 
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
+
+LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
 
 @dataclass(slots=True)
@@ -17,7 +20,12 @@ class WyomingDiscovery:
     _info: ServiceInfo | None = field(init=False, default=None)
 
     async def start(self) -> None:
-        addr = socket.inet_aton(self.host)
+        try:
+            addr = socket.inet_aton(self.host)
+        except OSError as e:
+            LOGGER.warning("Invalid host address %s, using 127.0.0.1: %s", self.host, e)
+            addr = socket.inet_aton("127.0.0.1")
+
         self._info = ServiceInfo(
             type_="_wyoming._tcp.local.",
             name=f"{self.service_name}._wyoming._tcp.local.",
@@ -32,8 +40,15 @@ class WyomingDiscovery:
         )
         self._zc = AsyncZeroconf(ip_version=IPVersion.All)
         await self._zc.async_register_service(self._info)
+        LOGGER.info("mDNS service registered: %s", self.service_name)
 
     async def stop(self) -> None:
-        if self._zc and self._info:
-            await self._zc.async_unregister_service(self._info)
-            await self._zc.async_close()
+        try:
+            if self._zc and self._info:
+                await self._zc.async_unregister_service(self._info)
+                await self._zc.async_close()
+        except Exception as e:
+            LOGGER.warning("Failed to unregister mDNS service: %s", e)
+        finally:
+            self._zc = None
+            self._info = None

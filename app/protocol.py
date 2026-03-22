@@ -4,9 +4,6 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-# 缓存 JSON encoder，避免重复创建
-_JSON_ENCODER = json.JSONEncoder(ensure_ascii=True)
-
 
 @dataclass(slots=True)
 class WyomingMessage:
@@ -67,7 +64,6 @@ def encode_header(message_type: str, data: dict[str, Any], payload: bytes) -> by
     header: dict[str, Any] = {"type": message_type, "data": data}
     if payload:
         header["payload_length"] = len(payload)
-    # 使用快速路径：直接构建字符串
     return (json.dumps(header, ensure_ascii=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 

@@ -22,6 +22,14 @@ def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Get boolean from environment variable."""
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in ("true", "1", "yes", "on")
+
+
 @dataclass(slots=True)
 class AppConfig:
     host: str
@@ -42,19 +50,25 @@ def parse_args() -> AppConfig:
     )
     parser.add_argument(
         "--host",
-        default=_env_str("WYOMING_HOST", "0.0.0.0"),
+        default=_env_str("HOST", "0.0.0.0"),
         help="Server listen host.",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=_env_int("WYOMING_PORT", 10300),
+        default=_env_int("PORT", 10300),
         help="Server listen port.",
     )
     parser.add_argument(
         "--service-name",
-        default=_env_str("WYOMING_SERVICE_NAME", "sherpa-funasr"),
+        default=_env_str("SERVICE_NAME", "wyoming-sherpa-onnx"),
         help="mDNS service instance name for HA auto discovery.",
+    )
+    parser.add_argument(
+        "--zeroconf",
+        action="store_true",
+        default=None,
+        help="Enable mDNS service broadcast.",
     )
     parser.add_argument(
         "--no-zeroconf",
@@ -63,31 +77,31 @@ def parse_args() -> AppConfig:
     )
     parser.add_argument(
         "--model-name",
-        default=_env_str("WYOMING_MODEL_NAME", "sherpa-onnx-funasr-nano-int8-2025-12-30"),
+        default=_env_str("MODEL_NAME", "sherpa-onnx-funasr-nano-int8-2025-12-30"),
         help="Model name exposed in Wyoming info.",
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=_env_path("WYOMING_MODEL_DIR", "/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30"),
+        default=_env_path("MODEL_DIR", "/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30"),
         help="Path to model directory.",
     )
     parser.add_argument(
         "--sample-rate",
         type=int,
-        default=_env_int("WYOMING_SAMPLE_RATE", 16000),
+        default=_env_int("SAMPLE_RATE", 16000),
         help="ASR target sample rate.",
     )
     parser.add_argument(
         "--num-threads",
         type=int,
-        default=_env_int("WYOMING_NUM_THREADS", 2),
+        default=_env_int("NUM_THREADS", 2),
         help="Threads used by sherpa-onnx.",
     )
     parser.add_argument(
         "--auto-download",
         action="store_true",
-        default=True,
+        default=None,
         help="Auto download model if not exists (default: True).",
     )
     parser.add_argument(
@@ -102,14 +116,27 @@ def parse_args() -> AppConfig:
     )
     args = parser.parse_args()
 
+    # --no-zeroconf 覆盖 --zeroconf
+    if args.zeroconf is None:
+        # 从环境变量读取
+        enable_zeroconf = _env_bool("ZEROCONF", False)
+    else:
+        enable_zeroconf = args.zeroconf
+    if args.no_zeroconf:
+        enable_zeroconf = False
+
     # --no-auto-download 覆盖 --auto-download
-    auto_download = args.auto_download and not args.no_auto_download
+    if args.auto_download is None:
+        auto_download = _env_bool("AUTO_DOWNLOAD", True)
+    else:
+        auto_download = args.auto_download
+    auto_download = auto_download and not args.no_auto_download
 
     return AppConfig(
         host=args.host,
         port=args.port,
         service_name=args.service_name,
-        enable_zeroconf=not args.no_zeroconf,
+        enable_zeroconf=enable_zeroconf,
         model_name=args.model_name,
         model_dir=args.model_dir.resolve(),
         sample_rate=args.sample_rate,

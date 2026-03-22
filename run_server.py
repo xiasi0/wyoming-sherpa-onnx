@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import socket
 import sys
 
@@ -11,6 +13,7 @@ from app.server import WyomingAsrServer
 
 
 def _resolve_advertise_host(bind_host: str) -> str:
+    """Resolve the host to advertise to clients."""
     if bind_host not in ("0.0.0.0", "::"):
         return bind_host
     probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -50,7 +53,7 @@ async def main() -> None:
         level=logging.DEBUG if cfg.debug else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    logger = logging.getLogger("wyoming-sherpa-funasr")
+    logger = logging.getLogger("wyoming-sherpa-onnx")
 
     # 检查和下载模型
     from app.downloader import check_model_exists, download_model
@@ -94,14 +97,32 @@ async def main() -> None:
             model_name=cfg.model_name,
         )
         await discovery.start()
-        logger.info("Zeroconf enabled")
 
     server = WyomingAsrServer(cfg)
+    shutdown_event = asyncio.Event()
+
+    def _signal_handler():
+        logger.info("Shutdown signal received")
+        shutdown_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _signal_handler)
+        except NotImplementedError:
+            # Windows 不支持 add_signal_handler
+            pass
+
     try:
         await server.run()
+        logger.info("Service ready at %s:%s", cfg.host, cfg.port)
+        await shutdown_event.wait()
+    except asyncio.CancelledError:
+        logger.info("Server cancelled")
     finally:
         if discovery is not None:
             await discovery.stop()
+        logger.info("Server shutdown complete")
 
 
 if __name__ == "__main__":

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
 from typing import Callable
 
-LOGGER = logging.getLogger("wyoming-sherpa-funasr")
+LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
 # 模型配置
 MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2"
@@ -49,7 +50,7 @@ def check_model_exists(model_dir: Path) -> bool:
             LOGGER.debug("Missing model file: %s", filename)
             return False
 
-    LOGGER.info("Model files verified: %s", model_dir)
+    LOGGER.debug("Model files verified: %s", model_dir)
     return True
 
 
@@ -79,57 +80,63 @@ def download_model(
 
     LOGGER.info("Downloading model from %s", MODEL_URL)
 
-    with tempfile.NamedTemporaryFile(suffix=".tar.bz2", delete=False) as tmp_file:
-        tmp_path = Path(tmp_file.name)
-        try:
-            # 获取文件大小
-            with urllib.request.urlopen(MODEL_URL, timeout=300) as response:
-                total_size = int(response.getheader("Content-Length", 0))
+    tmp_path = None
+    try:
+        # 创建临时文件
+        fd, tmp_path = tempfile.mkstemp(suffix=".tar.bz2")
+        os.close(fd)
 
-            # 下载文件（使用更大的块）
-            downloaded = 0
-            last_report_percent = 0.0
+        # 获取文件大小
+        with urllib.request.urlopen(MODEL_URL, timeout=300) as response:
+            total_size = int(response.getheader("Content-Length", 0))
 
-            with urllib.request.urlopen(MODEL_URL, timeout=300) as response, open(tmp_path, "wb") as out_file:
-                while True:
-                    chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    out_file.write(chunk)
-                    downloaded += len(chunk)
+        # 下载文件
+        downloaded = 0
+        last_report_percent = 0.0
 
-                    # 报告进度（每 1% 报告一次）
-                    if total_size > 0:
-                        current_percent = downloaded / total_size * 100
-                        if current_percent - last_report_percent >= PROGRESS_REPORT_INTERVAL * 100:
-                            if progress_callback:
-                                progress_callback(downloaded, total_size, current_percent)
-                            last_report_percent = current_percent
+        with urllib.request.urlopen(MODEL_URL, timeout=300) as response, open(tmp_path, "wb") as out_file:
+            while True:
+                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                out_file.write(chunk)
+                downloaded += len(chunk)
 
-            # 最终进度报告
-            if progress_callback and total_size > 0:
-                progress_callback(downloaded, total_size, 100.0)
+                # 报告进度（每 1% 报告一次）
+                if total_size > 0:
+                    current_percent = downloaded / total_size * 100
+                    if current_percent - last_report_percent >= PROGRESS_REPORT_INTERVAL * 100:
+                        if progress_callback:
+                            progress_callback(downloaded, total_size, current_percent)
+                        last_report_percent = current_percent
 
-            LOGGER.info("Download completed, extracting...")
+        # 最终进度报告
+        if progress_callback and total_size > 0:
+            progress_callback(downloaded, total_size, 100.0)
 
-            # 解压文件
-            with tarfile.open(tmp_path, "r:bz2") as tar:
-                tar.extractall(dest_dir)
+        LOGGER.info("Download completed, extracting...")
 
-            # 验证解压后的文件
-            if not check_model_exists(model_path):
-                raise RuntimeError("Model verification failed after extraction")
+        # 解压文件
+        with tarfile.open(tmp_path, "r:bz2") as tar:
+            tar.extractall(dest_dir)
 
-            LOGGER.info("Model downloaded and extracted to: %s", model_path)
-            return model_path
+        # 验证解压后的文件
+        if not check_model_exists(model_path):
+            raise RuntimeError("Model verification failed after extraction")
 
-        except Exception as e:
-            LOGGER.error("Download failed: %s", e)
-            raise RuntimeError(f"Failed to download model: {e}") from e
-        finally:
-            # 清理临时文件
-            if tmp_path.exists():
-                tmp_path.unlink()
+        LOGGER.info("Model downloaded and extracted to: %s", model_path)
+        return model_path
+
+    except Exception as e:
+        LOGGER.error("Download failed: %s", e)
+        raise RuntimeError(f"Failed to download model: {e}") from e
+    finally:
+        # 清理临时文件
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass  # 忽略清理失败
 
 
 def format_size(size_bytes: int) -> str:

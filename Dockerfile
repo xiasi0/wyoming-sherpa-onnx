@@ -20,8 +20,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # 运行阶段
 FROM python:3.12-slim
 
-LABEL maintainer="Wyoming Sherpa FunASR"
-LABEL description="Wyoming ASR server with sherpa-onnx FunASR Nano"
+LABEL maintainer="Wyoming Sherpa ONNX"
+LABEL description="Wyoming ASR server with sherpa-onnx"
 
 # 从构建阶段复制虚拟环境
 COPY --from=builder /opt/venv /opt/venv
@@ -37,31 +37,32 @@ COPY run_server.py .
 # 创建模型目录和数据目录
 RUN mkdir -p /data/models
 
+# 清理构建缓存
+RUN rm -rf /var/cache/apt/* /var/log/dpkg.log /var/log/apt/* /tmp/*
+
 # 创建非 root 用户
 RUN useradd --create-home --shell /bin/bash appuser && \
     chown -R appuser:appuser /app && \
     mkdir -p /data/models && \
-    chown -R appuser:appuser /data
+    chown -R appuser:appuser /data && \
+    rm -rf /root/.cache /tmp/*
+
 USER appuser
 
 # 暴露端口
 EXPOSE 10300
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import socket; s=socket.socket(); s.settimeout(5); s.connect(('127.0.0.1', 10300)); s.close()" || exit 1
-
 # 环境变量默认值
-ENV WYOMING_HOST=0.0.0.0
-ENV WYOMING_PORT=10300
-ENV WYOMING_SERVICE_NAME=sherpa-funasr
-ENV WYOMING_ZEROCONF=true
-ENV WYOMING_MODEL_NAME=sherpa-onnx-funasr-nano-int8-2025-12-30
-ENV WYOMING_MODEL_DIR=/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30
-ENV WYOMING_SAMPLE_RATE=16000
-ENV WYOMING_NUM_THREADS=2
-ENV WYOMING_AUTO_DOWNLOAD=true
-ENV WYOMING_DEBUG=false
+ENV HOST=0.0.0.0
+ENV PORT=10300
+ENV SERVICE_NAME=wyoming-sherpa-onnx
+ENV ZEROCONF=false
+ENV MODEL_NAME=sherpa-onnx-funasr-nano-int8-2025-12-30
+ENV MODEL_DIR=/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30
+ENV SAMPLE_RATE=16000
+ENV NUM_THREADS=2
+ENV AUTO_DOWNLOAD=true
+ENV DEBUG=false
 
 # 启动命令
 ENTRYPOINT ["python", "run_server.py"]

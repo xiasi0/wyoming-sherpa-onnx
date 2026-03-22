@@ -22,13 +22,14 @@ class FunAsrNanoEngine:
         self.sample_rate = sample_rate
         self.num_threads = num_threads
         self.recognizer = self._build_recognizer()
-        
+
         # 预计算音频转换参数，避免重复计算
         self._width_divisors = {
             2: 32768.0,
             4: 2147483648.0,
             1: 128.0,
         }
+        self._dtype_map = {2: np.int16, 4: np.int32, 1: np.uint8}
 
     def _build_recognizer(self):
         fn = sherpa_onnx.OfflineRecognizer.from_funasr_nano
@@ -92,13 +93,14 @@ class FunAsrNanoEngine:
         """
         self.recognizer.decode_stream(stream)
 
-        # 优化：直接访问 result 属性，避免多次 hasattr 检查
+        # 优先从 stream.result 获取
         stream_result = getattr(stream, "result", None)
         if stream_result is not None:
             text = getattr(stream_result, "text", "")
             if text:
                 return str(text).strip()
-        
+
+        # 回退到 recognizer.get_result
         get_result = getattr(self.recognizer, "get_result", None)
         if get_result is not None:
             result = get_result(stream)
@@ -136,20 +138,17 @@ class FunAsrNanoEngine:
         Returns:
             float32 波形数组
         """
-        # 使用预计算的除数
-        divisor = self._width_divisors.get(width)
-        if divisor is None:
-            raise ValueError(f"Unsupported sample width: {width}")
-        
         # 根据位深选择 dtype
-        if width == 2:
-            data = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / divisor
-        elif width == 4:
-            data = np.frombuffer(pcm, dtype=np.int32).astype(np.float32) / divisor
-        elif width == 1:
-            data = (np.frombuffer(pcm, dtype=np.uint8).astype(np.float32) - 128.0) / divisor
-        else:
+        dtype = self._dtype_map.get(width)
+        if dtype is None:
             raise ValueError(f"Unsupported sample width: {width}")
+
+        divisor = self._width_divisors[width]
+        data = np.frombuffer(pcm, dtype=dtype).astype(np.float32) / divisor
+
+        # 位深为 1 时需要减去 128（无符号转有符号）
+        if width == 1:
+            data -= 128.0 / divisor
 
         # 多声道混合为单声道
         if channels > 1:
@@ -175,9 +174,9 @@ class FunAsrNanoEngine:
         duration = samples.size / float(src_rate)
         new_size = int(round(duration * dst_rate))
         if new_size <= 1:
-            return np.array([], dtype=np.float32)
+            return np.empty(0, dtype=np.float32)
 
-        # 优化：避免重复创建数组
-        src_x = np.linspace(0.0, duration, num=samples.size, endpoint=False)
-        dst_x = np.linspace(0.0, duration, num=new_size, endpoint=False)
+        # 使用更高效的 linspace 计算
+        src_x = np.linspace(0.0, duration, num=samples.size, endpoint=False, dtype=np.float64)
+        dst_x = np.linspace(0.0, duration, num=new_size, endpoint=False, dtype=np.float64)
         return np.interp(dst_x, src_x, samples).astype(np.float32)

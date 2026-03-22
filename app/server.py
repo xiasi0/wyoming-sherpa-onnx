@@ -10,7 +10,7 @@ from .asr_engine import AudioFormat, FunAsrNanoEngine
 from .config import AppConfig
 from .protocol import read_message, write_message
 
-LOGGER = logging.getLogger("wyoming-sherpa-funasr")
+LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
 # 预计算常量，避免重复计算
 _BYTES_PER_SAMPLE = {2: 2, 4: 4, 1: 1}  # width -> bytes
@@ -37,7 +37,7 @@ class WyomingAsrServer:
         self._info_cache: dict[str, Any] | None = None
 
     async def handle_client(self, reader, writer) -> None:
-        peer = writer.get_extra_info("peername")
+        peer = self._get_peername(writer)
         LOGGER.info("Client connected: %s", peer)
         state = SessionState(
             transcribe_opts={},
@@ -126,11 +126,22 @@ class WyomingAsrServer:
                     LOGGER.debug("Ignoring unsupported message type: %s", msg.msg_type)
         except EOFError:
             LOGGER.info("Client disconnected: %s", peer)
+        except asyncio.CancelledError:
+            LOGGER.info("Client session cancelled: %s", peer)
+            raise
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("Client session error: %s", exc)
         finally:
             writer.close()
             await writer.wait_closed()
+
+    def _get_peername(self, writer) -> str:
+        """获取客户端地址，安全处理异常。"""
+        try:
+            peer = writer.get_extra_info("peername")
+            return str(peer) if peer else "unknown"
+        except Exception:
+            return "unknown"
 
     def _get_info(self) -> dict[str, Any]:
         """获取 Wyoming 协议 info 响应（带缓存）。"""

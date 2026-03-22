@@ -2,6 +2,8 @@
 
 基于 **Wyoming 协议** 的语音识别服务端，使用 `sherpa-onnx-funasr-nano-int8` 模型进行离线语音识别，支持通过 mDNS 广播供 Home Assistant 自动发现。
 
+> **注意**: 本项目由 Qwen 代码助手生成和优化。
+
 ## 功能特性
 
 - 支持 Wyoming 协议：`describe/info`、`transcribe`、`audio-start/chunk/stop`、`transcript`

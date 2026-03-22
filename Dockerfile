@@ -39,7 +39,9 @@ RUN mkdir -p /data/models
 
 # 创建非 root 用户
 RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app /data
+    chown -R appuser:appuser /app && \
+    mkdir -p /data/models && \
+    chown -R appuser:appuser /data
 USER appuser
 
 # 暴露端口

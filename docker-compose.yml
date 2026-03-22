@@ -5,11 +5,12 @@ services:
       dockerfile: Dockerfile
     container_name: wyoming-sherpa-funasr
     restart: unless-stopped
+    user: root
     ports:
       - "10300:10300"
     volumes:
-      # 模型数据持久化 - 映射到宿主机根目录的 /data/models
-      - /data/models:/data/models:rw
+      # 模型数据持久化 - 映射到 /home/models
+      - /home/models:/data/models:rw
     environment:
       # 服务器配置
       - WYOMING_HOST=0.0.0.0

@@ -1,8 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _env_int(name: str, default: int) -> int:
+    """Get integer from environment variable."""
+    value = os.environ.get(name)
+    return int(value) if value else default
+
+
+def _env_str(name: str, default: str) -> str:
+    """Get string from environment variable."""
+    return os.environ.get(name, default)
+
+
+def _env_path(name: str, default: str) -> Path:
+    """Get path from environment variable."""
+    return Path(os.environ.get(name, default))
 
 
 @dataclass(slots=True)
@@ -23,11 +40,20 @@ def parse_args() -> AppConfig:
     parser = argparse.ArgumentParser(
         description="Wyoming ASR server backed by sherpa-onnx FunASR Nano."
     )
-    parser.add_argument("--host", default="0.0.0.0", help="Server listen host.")
-    parser.add_argument("--port", type=int, default=10300, help="Server listen port.")
+    parser.add_argument(
+        "--host",
+        default=_env_str("WYOMING_HOST", "0.0.0.0"),
+        help="Server listen host.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=_env_int("WYOMING_PORT", 10300),
+        help="Server listen port.",
+    )
     parser.add_argument(
         "--service-name",
-        default="sherpa-funasr",
+        default=_env_str("WYOMING_SERVICE_NAME", "sherpa-funasr"),
         help="mDNS service instance name for HA auto discovery.",
     )
     parser.add_argument(
@@ -37,25 +63,25 @@ def parse_args() -> AppConfig:
     )
     parser.add_argument(
         "--model-name",
-        default="sherpa-onnx-funasr-nano-int8-2025-12-30",
+        default=_env_str("WYOMING_MODEL_NAME", "sherpa-onnx-funasr-nano-int8-2025-12-30"),
         help="Model name exposed in Wyoming info.",
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        required=True,
+        default=_env_path("WYOMING_MODEL_DIR", "/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30"),
         help="Path to model directory.",
     )
     parser.add_argument(
         "--sample-rate",
         type=int,
-        default=16000,
+        default=_env_int("WYOMING_SAMPLE_RATE", 16000),
         help="ASR target sample rate.",
     )
     parser.add_argument(
         "--num-threads",
         type=int,
-        default=2,
+        default=_env_int("WYOMING_NUM_THREADS", 2),
         help="Threads used by sherpa-onnx.",
     )
     parser.add_argument(

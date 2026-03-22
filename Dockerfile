@@ -62,13 +62,4 @@ ENV WYOMING_AUTO_DOWNLOAD=true
 ENV WYOMING_DEBUG=false
 
 # 启动命令
-ENTRYPOINT ["python", "run_server.py"]
-CMD [
-    "--host", "${WYOMING_HOST}",
-    "--port", "${WYOMING_PORT}",
-    "--service-name", "${WYOMING_SERVICE_NAME}",
-    "--model-dir", "${WYOMING_MODEL_DIR}",
-    "--model-name", "${WYOMING_MODEL_NAME}",
-    "--sample-rate", "${WYOMING_SAMPLE_RATE}",
-    "--num-threads", "${WYOMING_NUM_THREADS}"
-]
+ENTRYPOINT ["python", "run_server.py", "--host", "$WYOMING_HOST", "--port", "$WYOMING_PORT", "--service-name", "$WYOMING_SERVICE_NAME", "--model-dir", "$WYOMING_MODEL_DIR", "--model-name", "$WYOMING_MODEL_NAME", "--sample-rate", "$WYOMING_SAMPLE_RATE", "--num-threads", "$WYOMING_NUM_THREADS"]

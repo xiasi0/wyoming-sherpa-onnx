@@ -1,0 +1,3 @@
+numpy>=1.24
+sherpa-onnx>=1.12.0
+zeroconf>=0.133.0

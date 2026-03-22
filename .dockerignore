@@ -1,0 +1,35 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv
+venv
+env
+.env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Docker
+.dockerignore
+
+# Test
+tests/
+*.log
+
+# Model data (not included in image)
+data/models/
+
+# Temporary files
+*.tmp
+*.bak

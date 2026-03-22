@@ -1,0 +1,36 @@
+services:
+  wyoming-sherpa-funasr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wyoming-sherpa-funasr
+    restart: unless-stopped
+    ports:
+      - "10300:10300"
+    volumes:
+      # 模型数据持久化 - 映射到宿主机根目录的 /data/models
+      - /data/models:/data/models:rw
+    environment:
+      # 服务器配置
+      - WYOMING_HOST=0.0.0.0
+      - WYOMING_PORT=10300
+      - WYOMING_SERVICE_NAME=sherpa-funasr
+      # Zeroconf/mDNS 配置 (设为 false 禁用)
+      - WYOMING_ZEROCONF=true
+      # 模型配置
+      - WYOMING_MODEL_NAME=sherpa-onnx-funasr-nano-int8-2025-12-30
+      - WYOMING_MODEL_DIR=/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30
+      # 性能配置
+      - WYOMING_SAMPLE_RATE=16000
+      - WYOMING_NUM_THREADS=2
+      # 其他配置
+      - WYOMING_AUTO_DOWNLOAD=true
+      - WYOMING_DEBUG=false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(5); s.connect(('127.0.0.1', 10300)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.wyoming.asr=true"

@@ -56,6 +56,8 @@ docker compose logs -f
 ${HOME}/models
 ```
 
+警告：在 Apple Docker ARM64 环境下，当前 `Qwen3-ASR` 的 tokenizer 可能出现兼容性问题，建议优先在 Linux x86_64 环境验证。
+
 ## 模型目录结构
 
 模型目录至少需要这些文件：

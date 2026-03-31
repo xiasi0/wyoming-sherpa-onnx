@@ -1,1 +1,1 @@
-"""Wyoming sherpa-onnx FunASR server."""
+"""Wyoming sherpa-onnx Qwen3-ASR server."""

@@ -53,4 +53,8 @@ if __name__ == "__main__":
             send(s, "audio-chunk", {"rate": sr, "width": 2, "channels": 1}, pcm[i : i + chunk])
 
         send(s, "audio-stop")
-        print("transcript =>", recv_msg(s)[0])
+        while True:
+            header, _ = recv_msg(s)
+            print("recv =>", header)
+            if header["type"] == "transcript":
+                break

@@ -1,4 +1,4 @@
-"""Model downloader for sherpa-onnx FunASR Nano models."""
+"""Qwen3-ASR model validation and download helpers."""
 
 from __future__ import annotations
 
@@ -12,45 +12,48 @@ from typing import Callable
 
 LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
-# 模型配置
-MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2"
-MODEL_NAME = "sherpa-onnx-funasr-nano-int8-2025-12-30"
+MODEL_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
+)
+MODEL_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 
-# 必需的模型文件
-REQUIRED_FILES = [
-    "encoder_adaptor.int8.onnx",
-    "llm.int8.onnx",
-    "embedding.int8.onnx",
-    "Qwen3-0.6B/tokenizer.json",
-    "Qwen3-0.6B/vocab.json",
-    "Qwen3-0.6B/merges.txt",
-]
-
-# 下载块大小（64KB）
 DOWNLOAD_CHUNK_SIZE = 65536
-# 进度报告间隔（每 1% 报告一次）
 PROGRESS_REPORT_INTERVAL = 0.01
 
 
 def check_model_exists(model_dir: Path) -> bool:
-    """检查模型文件是否存在且完整。
-
-    Args:
-        model_dir: 模型目录路径
-
-    Returns:
-        True 如果所有必需文件存在，否则 False
-    """
-    if not model_dir.exists():
+    """Verify that a Qwen3-ASR model directory looks usable."""
+    if not model_dir.exists() or not model_dir.is_dir():
         return False
 
-    for filename in REQUIRED_FILES:
-        file_path = model_dir / filename
-        if not file_path.exists():
-            LOGGER.debug("Missing model file: %s", filename)
-            return False
+    conv_frontend = model_dir / "conv_frontend.onnx"
+    encoder = model_dir / "encoder.int8.onnx"
+    decoder = model_dir / "decoder.int8.onnx"
+    tokenizer_dir = model_dir / "tokenizer"
 
-    LOGGER.debug("Model files verified: %s", model_dir)
+    if not conv_frontend.exists():
+        LOGGER.debug("Missing conv_frontend.onnx under model dir: %s", model_dir)
+        return False
+
+    if not encoder.exists():
+        LOGGER.debug("Missing encoder.int8.onnx under model dir: %s", model_dir)
+        return False
+
+    if not decoder.exists():
+        LOGGER.debug("Missing decoder.int8.onnx under model dir: %s", model_dir)
+        return False
+
+    if not tokenizer_dir.is_dir():
+        LOGGER.debug("Missing tokenizer directory under model dir: %s", model_dir)
+        return False
+
+    has_tokenizer_assets = any((tokenizer_dir / name).exists() for name in ("vocab.json", "merges.txt"))
+    if not has_tokenizer_assets:
+        LOGGER.debug("Tokenizer directory is missing vocab/merges files under model dir: %s", model_dir)
+        return False
+
+    LOGGER.debug("Qwen3-ASR model files verified: %s", model_dir)
     return True
 
 
@@ -58,18 +61,7 @@ def download_model(
     dest_dir: Path,
     progress_callback: Callable[[int, int, float], None] | None = None,
 ) -> Path:
-    """下载并解压模型文件。
-
-    Args:
-        dest_dir: 目标目录（父目录）
-        progress_callback: 进度回调函数 (downloaded, total, percent)
-
-    Returns:
-        模型目录路径
-
-    Raises:
-        RuntimeError: 下载或解压失败
-    """
+    """Download and extract the default Qwen3-ASR model."""
     dest_dir = dest_dir.resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,15 +74,12 @@ def download_model(
 
     tmp_path = None
     try:
-        # 创建临时文件
         fd, tmp_path = tempfile.mkstemp(suffix=".tar.bz2")
         os.close(fd)
 
-        # 获取文件大小
         with urllib.request.urlopen(MODEL_URL, timeout=300) as response:
             total_size = int(response.getheader("Content-Length", 0))
 
-        # 下载文件
         downloaded = 0
         last_report_percent = 0.0
 
@@ -102,52 +91,37 @@ def download_model(
                 out_file.write(chunk)
                 downloaded += len(chunk)
 
-                # 报告进度（每 1% 报告一次）
                 if total_size > 0:
                     current_percent = downloaded / total_size * 100
                     if current_percent - last_report_percent >= PROGRESS_REPORT_INTERVAL * 100:
-                        if progress_callback:
+                        if progress_callback is not None:
                             progress_callback(downloaded, total_size, current_percent)
                         last_report_percent = current_percent
 
-        # 最终进度报告
-        if progress_callback and total_size > 0:
+        if progress_callback is not None and total_size > 0:
             progress_callback(downloaded, total_size, 100.0)
 
         LOGGER.info("Download completed, extracting...")
-
-        # 解压文件
         with tarfile.open(tmp_path, "r:bz2") as tar:
             tar.extractall(dest_dir)
 
-        # 验证解压后的文件
         if not check_model_exists(model_path):
             raise RuntimeError("Model verification failed after extraction")
 
         LOGGER.info("Model downloaded and extracted to: %s", model_path)
         return model_path
-
-    except Exception as e:
-        LOGGER.error("Download failed: %s", e)
-        raise RuntimeError(f"Failed to download model: {e}") from e
+    except Exception as exc:
+        LOGGER.error("Download failed: %s", exc)
+        raise RuntimeError(f"Failed to download model: {exc}") from exc
     finally:
-        # 清理临时文件
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
             except OSError:
-                pass  # 忽略清理失败
+                pass
 
 
 def format_size(size_bytes: int) -> str:
-    """格式化文件大小显示。
-
-    Args:
-        size_bytes: 字节数
-
-    Returns:
-        格式化后的大小字符串 (如 "100.5 MB")
-    """
     for unit in ["B", "KB", "MB", "GB"]:
         if size_bytes < 1024.0:
             return f"{size_bytes:.1f} {unit}"

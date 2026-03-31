@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import inspect
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import sherpa_onnx
+
+LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
 
 @dataclass(slots=True)
@@ -16,14 +17,24 @@ class AudioFormat:
     channels: int
 
 
-class FunAsrNanoEngine:
+@dataclass(slots=True)
+class Qwen3AsrStream:
+    pcm_buffer: bytearray = field(default_factory=bytearray)
+
+
+class Qwen3AsrEngine:
     def __init__(self, model_dir: Path, sample_rate: int, num_threads: int) -> None:
         self.model_dir = model_dir
         self.sample_rate = sample_rate
         self.num_threads = num_threads
         self.recognizer = self._build_recognizer()
+        LOGGER.debug(
+            "Initialized Qwen3-ASR engine: model_dir=%s sample_rate=%s num_threads=%s",
+            self.model_dir,
+            self.sample_rate,
+            self.num_threads,
+        )
 
-        # 预计算音频转换参数，避免重复计算
         self._width_divisors = {
             2: 32768.0,
             4: 2147483648.0,
@@ -31,126 +42,91 @@ class FunAsrNanoEngine:
         }
         self._dtype_map = {2: np.int16, 4: np.int32, 1: np.uint8}
 
-    def _build_recognizer(self):
-        fn = sherpa_onnx.OfflineRecognizer.from_funasr_nano
-        sig = inspect.signature(fn)
+    def _build_recognizer(self) -> sherpa_onnx.OfflineRecognizer:
+        factory = getattr(sherpa_onnx.OfflineRecognizer, "from_qwen3_asr", None)
+        if not callable(factory):
+            raise RuntimeError(
+                "Current sherpa-onnx build does not expose OfflineRecognizer.from_qwen3_asr."
+            )
 
-        candidates: dict[str, Any] = {
-            "model": str(self.model_dir / "encoder_adaptor.int8.onnx"),
-            "encoder_adaptor": str(self.model_dir / "encoder_adaptor.int8.onnx"),
-            "encoder": str(self.model_dir / "encoder_adaptor.int8.onnx"),
-            "llm": str(self.model_dir / "llm.int8.onnx"),
-            "embedding": str(self.model_dir / "embedding.int8.onnx"),
-            "tokenizer": str(self.model_dir / "Qwen3-0.6B"),
-            "tokenizer_json": str(self.model_dir / "Qwen3-0.6B" / "tokenizer.json"),
-            "tokens": str(self.model_dir / "Qwen3-0.6B" / "tokenizer.json"),
+        kwargs = {
+            "conv_frontend": str(self.model_dir / "conv_frontend.onnx"),
+            "encoder": str(self.model_dir / "encoder.int8.onnx"),
+            "decoder": str(self.model_dir / "decoder.int8.onnx"),
+            "tokenizer": str(self.model_dir / "tokenizer"),
             "num_threads": self.num_threads,
             "sample_rate": self.sample_rate,
             "debug": False,
         }
+        LOGGER.debug("Qwen3-ASR factory kwargs resolved: %s", sorted(kwargs.keys()))
+        return factory(**kwargs)
 
-        kwargs = {k: v for k, v in candidates.items() if k in sig.parameters}
-        if not kwargs:
-            raise RuntimeError("Unable to build FunASR Nano recognizer, unexpected API.")
-
-        return fn(**kwargs)
-
-    def create_stream(self) -> sherpa_onnx.OfflineStream:
-        """创建一个新的识别流。
-
-        Returns:
-            OfflineStream 对象
-        """
-        return self.recognizer.create_stream()
+    def create_stream(self) -> Qwen3AsrStream:
+        LOGGER.debug("Created offline ASR stream")
+        return Qwen3AsrStream()
 
     def feed_audio_to_stream(
         self,
-        stream: sherpa_onnx.OfflineStream,
+        stream: Qwen3AsrStream,
         pcm_bytes: bytes,
         fmt: AudioFormat,
     ) -> None:
-        """向流中馈送音频数据。
-
-        Args:
-            stream: OfflineStream 对象
-            pcm_bytes: PCM 音频数据
-            fmt: 音频格式
-        """
         waveform = self._pcm_to_float32(pcm_bytes, fmt.width, fmt.channels)
         if fmt.rate != self.sample_rate:
             waveform = self._resample_linear(waveform, fmt.rate, self.sample_rate)
-        if waveform.size > 0:
-            stream.accept_waveform(self.sample_rate, waveform)
+        if waveform.size == 0:
+            return
 
-    def finish_stream(self, stream: sherpa_onnx.OfflineStream) -> str:
-        """完成流识别并返回结果。
+        stream.pcm_buffer.extend((np.clip(waveform, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes())
+        LOGGER.debug(
+            "Accepted audio chunk: input_bytes=%s waveform_samples=%s buffered_pcm=%s",
+            len(pcm_bytes),
+            waveform.size,
+            len(stream.pcm_buffer),
+        )
 
-        Args:
-            stream: OfflineStream 对象
+    def finish_stream(self, stream: Qwen3AsrStream) -> str:
+        if not stream.pcm_buffer:
+            return ""
 
-        Returns:
-            识别结果文本
-        """
-        self.recognizer.decode_stream(stream)
+        recognizer_stream = self.recognizer.create_stream()
+        waveform = np.frombuffer(bytes(stream.pcm_buffer), dtype=np.int16).astype(np.float32) / 32768.0
+        if waveform.size == 0:
+            return ""
 
-        # 优先从 stream.result 获取
+        recognizer_stream.accept_waveform(self.sample_rate, waveform)
+        self.recognizer.decode_stream(recognizer_stream)
+        final_text = self._extract_text(recognizer_stream).strip()
+        LOGGER.debug("Final transcript text: %r", final_text)
+        return final_text
+
+    def _extract_text(self, stream) -> str:
         stream_result = getattr(stream, "result", None)
         if stream_result is not None:
             text = getattr(stream_result, "text", "")
             if text:
-                return str(text).strip()
+                return str(text)
 
-        # 回退到 recognizer.get_result
         get_result = getattr(self.recognizer, "get_result", None)
-        if get_result is not None:
+        if callable(get_result):
             result = get_result(stream)
             if isinstance(result, str):
-                return result.strip()
+                return result
             if isinstance(result, dict):
-                return str(result.get("text", "")).strip()
+                return str(result.get("text", ""))
+
         return ""
 
-    def transcribe_pcm(self, pcm_bytes: bytes, fmt: AudioFormat) -> str:
-        """一次性识别 PCM 音频（向后兼容）。
-
-        Args:
-            pcm_bytes: PCM 音频数据
-            fmt: 音频格式
-
-        Returns:
-            识别结果文本
-        """
-        if not pcm_bytes:
-            return ""
-
-        stream = self.create_stream()
-        self.feed_audio_to_stream(stream, pcm_bytes, fmt)
-        return self.finish_stream(stream)
-
     def _pcm_to_float32(self, pcm: bytes, width: int, channels: int) -> np.ndarray:
-        """将 PCM 数据转换为 float32 波形。
-
-        Args:
-            pcm: PCM 字节数据
-            width: 采样位深（字节）
-            channels: 声道数
-
-        Returns:
-            float32 波形数组
-        """
-        # 根据位深选择 dtype
         dtype = self._dtype_map.get(width)
         if dtype is None:
             raise ValueError(f"Unsupported sample width: {width}")
 
         divisor = self._width_divisors[width]
         data = np.frombuffer(pcm, dtype=dtype).astype(np.float32) / divisor
-
-        # 位深为 1 时需要减去 128（无符号转有符号）
         if width == 1:
             data -= 128.0 / divisor
 
-        # 多声道混合为单声道
         if channels > 1:
             usable = (data.size // channels) * channels
             if usable > 0:
@@ -158,16 +134,6 @@ class FunAsrNanoEngine:
         return data
 
     def _resample_linear(self, samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
-        """线性重采样音频。
-
-        Args:
-            samples: 输入样本
-            src_rate: 源采样率
-            dst_rate: 目标采样率
-
-        Returns:
-            重采样后的样本
-        """
         if src_rate == dst_rate or samples.size == 0:
             return samples
 
@@ -176,7 +142,6 @@ class FunAsrNanoEngine:
         if new_size <= 1:
             return np.empty(0, dtype=np.float32)
 
-        # 使用更高效的 linspace 计算
         src_x = np.linspace(0.0, duration, num=samples.size, endpoint=False, dtype=np.float64)
         dst_x = np.linspace(0.0, duration, num=new_size, endpoint=False, dtype=np.float64)
         return np.interp(dst_x, src_x, samples).astype(np.float32)

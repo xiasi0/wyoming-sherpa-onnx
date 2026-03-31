@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 FROM python:3.12-slim
 
 LABEL maintainer="Wyoming Sherpa ONNX"
-LABEL description="Wyoming ASR server with sherpa-onnx"
+LABEL description="Wyoming offline ASR server for Qwen3-ASR"
 
 # 从构建阶段复制虚拟环境
 COPY --from=builder /opt/venv /opt/venv
@@ -57,8 +57,8 @@ ENV HOST=0.0.0.0
 ENV PORT=10300
 ENV SERVICE_NAME=wyoming-sherpa-onnx
 ENV ZEROCONF=false
-ENV MODEL_NAME=sherpa-onnx-funasr-nano-int8-2025-12-30
-ENV MODEL_DIR=/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30
+ENV MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
+ENV MODEL_DIR=/data/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
 ENV SAMPLE_RATE=16000
 ENV NUM_THREADS=2
 ENV AUTO_DOWNLOAD=true

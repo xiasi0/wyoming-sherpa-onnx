@@ -10,22 +10,16 @@ services:
     ports:
       - "10300:10300"
     volumes:
-      # 模型数据持久化 - 映射到 /home/models
-      - /home/models:/data/models:rw
+      - ${HOME}/models:/data/models:rw
     environment:
-      # 服务器配置
       - HOST=0.0.0.0
       - PORT=10300
       - SERVICE_NAME=wyoming-sherpa-onnx
-      # Zeroconf/mDNS 配置 (默认禁用)
       - ZEROCONF=false
-      # 模型配置
-      - MODEL_NAME=sherpa-onnx-funasr-nano-int8-2025-12-30
-      - MODEL_DIR=/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30
-      # 性能配置
+      - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
+      - MODEL_DIR=/data/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
       - SAMPLE_RATE=16000
       - NUM_THREADS=2
-      # 其他配置
       - AUTO_DOWNLOAD=true
       - DEBUG=false
     labels:

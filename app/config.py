@@ -22,6 +22,16 @@ def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default))
 
 
+def _default_model_dir() -> Path:
+    """Default to the repository-local model directory."""
+    return (
+        Path(__file__).resolve().parent.parent
+        / "data"
+        / "models"
+        / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+    )
+
+
 def _env_bool(name: str, default: bool) -> bool:
     """Get boolean from environment variable."""
     value = os.environ.get(name)
@@ -46,7 +56,7 @@ class AppConfig:
 
 def parse_args() -> AppConfig:
     parser = argparse.ArgumentParser(
-        description="Wyoming ASR server backed by sherpa-onnx FunASR Nano."
+        description="Wyoming ASR server for local Qwen3-ASR models."
     )
     parser.add_argument(
         "--host",
@@ -77,13 +87,13 @@ def parse_args() -> AppConfig:
     )
     parser.add_argument(
         "--model-name",
-        default=_env_str("MODEL_NAME", "sherpa-onnx-funasr-nano-int8-2025-12-30"),
+        default=_env_str("MODEL_NAME", "Qwen3-ASR"),
         help="Model name exposed in Wyoming info.",
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=_env_path("MODEL_DIR", "/data/models/sherpa-onnx-funasr-nano-int8-2025-12-30"),
+        default=_env_path("MODEL_DIR", str(_default_model_dir())),
         help="Path to model directory.",
     )
     parser.add_argument(

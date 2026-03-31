@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import socket
 import sys
@@ -26,28 +25,34 @@ def _resolve_advertise_host(bind_host: str) -> str:
         probe.close()
 
 
-def _download_progress(downloaded: int, total: int, percent: float) -> None:
-    """显示下载进度。
+_LAST_DOWNLOAD_LOG_PERCENT = -1
 
-    Args:
-        downloaded: 已下载字节数
-        total: 总字节数
-        percent: 百分比
-    """
+
+def _download_progress(downloaded: int, total: int, percent: float) -> None:
+    """Emit Docker-friendly download progress logs."""
+    global _LAST_DOWNLOAD_LOG_PERCENT
+
     from app.downloader import format_size
 
-    if total > 0:
-        bar_length = 40
-        filled = int(bar_length * percent / 100)
-        bar = "=" * filled + "-" * (bar_length - filled)
-        sys.stdout.write(
-            f"\rDownloading: [{bar}] {percent:.1f}% "
-            f"({format_size(downloaded)}/{format_size(total)})"
-        )
-        sys.stdout.flush()
+    if total <= 0:
+        return
+
+    percent_bucket = int(percent)
+    if percent_bucket == _LAST_DOWNLOAD_LOG_PERCENT and percent < 100.0:
+        return
+
+    _LAST_DOWNLOAD_LOG_PERCENT = percent_bucket
+    logging.getLogger("wyoming-sherpa-onnx").info(
+        "Model download progress: %.1f%% (%s/%s)",
+        percent,
+        format_size(downloaded),
+        format_size(total),
+    )
 
 
 async def main() -> None:
+    global _LAST_DOWNLOAD_LOG_PERCENT
+
     cfg = parse_args()
     logging.basicConfig(
         level=logging.DEBUG if cfg.debug else logging.INFO,
@@ -55,35 +60,29 @@ async def main() -> None:
     )
     logger = logging.getLogger("wyoming-sherpa-onnx")
 
-    # 检查和下载模型
-    from app.downloader import check_model_exists, download_model
+    from app.downloader import MODEL_URL, check_model_exists, download_model
 
     if not check_model_exists(cfg.model_dir):
         if cfg.auto_download:
             logger.info("Model not found, starting auto-download...")
+            _LAST_DOWNLOAD_LOG_PERCENT = -1
             try:
                 model_path = download_model(
                     dest_dir=cfg.model_dir.parent,
                     progress_callback=_download_progress,
                 )
-                logger.info("")  # 换行
                 logger.info("Model downloaded to: %s", model_path)
                 cfg.model_dir = model_path
-            except Exception as e:
-                logger.error("Failed to download model: %s", e)
-                logger.error(
-                    "Please download model manually or run with --no-auto-download "
-                    "if you want to skip model validation."
-                )
+            except Exception as exc:
+                logger.error("Failed to download model: %s", exc)
+                logger.error("Please download model manually from:\n%s", MODEL_URL)
                 sys.exit(1)
         else:
-            logger.error("Model directory does not exist: %s", cfg.model_dir)
+            logger.error("Qwen3-ASR model directory is invalid: %s", cfg.model_dir)
             logger.error(
-                "Please download the model manually from:\n"
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-                "sherpa-onnx-funasr-nano-int8-2025-12-30.tar.bz2\n\n"
-                "Or run with --auto-download to enable automatic download."
+                "The directory must contain ONNX model files and a tokenizer/tokens file."
             )
+            logger.error("Download URL:\n%s", MODEL_URL)
             sys.exit(1)
     else:
         logger.info("Model verified: %s", cfg.model_dir)
@@ -100,6 +99,7 @@ async def main() -> None:
 
     server = WyomingAsrServer(cfg)
     shutdown_event = asyncio.Event()
+    server_task: asyncio.Task[None] | None = None
 
     def _signal_handler():
         logger.info("Shutdown signal received")
@@ -114,12 +114,20 @@ async def main() -> None:
             pass
 
     try:
-        await server.run()
+        server_task = asyncio.create_task(server.run())
+        await asyncio.sleep(0)
         logger.info("Service ready at %s:%s", cfg.host, cfg.port)
         await shutdown_event.wait()
     except asyncio.CancelledError:
         logger.info("Server cancelled")
     finally:
+        await server.stop()
+        if server_task is not None:
+            server_task.cancel()
+            try:
+                await server_task
+            except asyncio.CancelledError:
+                pass
         if discovery is not None:
             await discovery.stop()
         logger.info("Server shutdown complete")

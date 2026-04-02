@@ -16,8 +16,7 @@ services:
       - PORT=10300
       - SERVICE_NAME=wyoming-sherpa-onnx
       - ZEROCONF=false
-      - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
-      - MODEL_DIR=/data/models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25
+      - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8
       - SAMPLE_RATE=16000
       - NUM_THREADS=2
       - AUTO_DOWNLOAD=true

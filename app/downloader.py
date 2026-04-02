@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 import logging
-import os
-import tarfile
+import shutil
 import tempfile
-import urllib.request
 from pathlib import Path
 from typing import Callable
 
+from modelscope.hub.snapshot_download import snapshot_download
+
 LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 
-MODEL_URL = (
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
-    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2"
-)
-MODEL_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
+MODEL_REPO_ID = "zengshuishui/Qwen3-ASR-onnx"
+MODEL_REPO_PAGE = "https://www.modelscope.cn/models/zengshuishui/Qwen3-ASR-onnx/files"
 
-DOWNLOAD_CHUNK_SIZE = 65536
-PROGRESS_REPORT_INTERVAL = 0.01
+CORE_REQUIRED_FILES = (
+    "conv_frontend.onnx",
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+)
+
+TOKENIZER_REQUIRED_FILES = (
+    "tokenizer/vocab.json",
+    "tokenizer/merges.txt",
+    "tokenizer/tokenizer_config.json",
+)
+
+
+MODEL_PROFILES: dict[str, str] = {
+    "0.6b": "model_0.6B",
+    "1.7b": "model_1.7B",
+}
 
 
 def check_model_exists(model_dir: Path) -> bool:
@@ -48,77 +60,126 @@ def check_model_exists(model_dir: Path) -> bool:
         LOGGER.debug("Missing tokenizer directory under model dir: %s", model_dir)
         return False
 
-    has_tokenizer_assets = any((tokenizer_dir / name).exists() for name in ("vocab.json", "merges.txt"))
+    has_tokenizer_assets = all(
+        (tokenizer_dir / name).exists()
+        for name in ("vocab.json", "merges.txt", "tokenizer_config.json")
+    )
     if not has_tokenizer_assets:
-        LOGGER.debug("Tokenizer directory is missing vocab/merges files under model dir: %s", model_dir)
+        LOGGER.debug(
+            "Tokenizer directory is missing required files (vocab/merges/tokenizer_config) under model dir: %s",
+            model_dir,
+        )
         return False
 
     LOGGER.debug("Qwen3-ASR model files verified: %s", model_dir)
     return True
 
 
+def select_model_profile_key(model_dir: Path, model_name: str = "") -> str:
+    """Choose 0.6B/1.7B profile key based on selected model directory/name."""
+    hint = f"{model_dir.name} {model_name}".lower()
+    if "1.7" in hint:
+        return "1.7b"
+    return "0.6b"
+
+
+def get_model_hint_url() -> str:
+    return MODEL_REPO_PAGE
+
+
+def _copy_tokenizer_from_snapshot(tmp_dir: Path, model_path: Path) -> bool:
+    """Copy tokenizer assets from repository root tokenizer directory."""
+    candidate = tmp_dir / "tokenizer"
+    vocab = candidate / "vocab.json"
+    merges = candidate / "merges.txt"
+    tokenizer_config = candidate / "tokenizer_config.json"
+    if not (vocab.exists() and merges.exists() and tokenizer_config.exists()):
+        return False
+
+    dst_dir = model_path / "tokenizer"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(vocab, dst_dir / "vocab.json")
+    shutil.copy2(merges, dst_dir / "merges.txt")
+    shutil.copy2(tokenizer_config, dst_dir / "tokenizer_config.json")
+    LOGGER.info("Tokenizer assets copied from snapshot root path: %s", candidate)
+    return True
+
+
 def download_model(
-    dest_dir: Path,
+    model_dir: Path,
+    model_name: str = "",
     progress_callback: Callable[[int, int, float], None] | None = None,
 ) -> Path:
-    """Download and extract the default Qwen3-ASR model."""
-    dest_dir = dest_dir.resolve()
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    """Download only required files for the selected Qwen3-ASR model profile."""
+    profile_key = select_model_profile_key(model_dir=model_dir, model_name=model_name)
+    profile_subdir = MODEL_PROFILES[profile_key]
+    model_path = model_dir.resolve()
+    model_path.mkdir(parents=True, exist_ok=True)
 
-    model_path = dest_dir / MODEL_NAME
     if check_model_exists(model_path):
-        LOGGER.info("Model already exists, skipping download")
+        LOGGER.info("Model already exists, skipping download: %s", model_path)
         return model_path
 
-    LOGGER.info("Downloading model from %s", MODEL_URL)
+    core_patterns = [f"{profile_subdir}/{name}" for name in CORE_REQUIRED_FILES]
+    LOGGER.info(
+        "Downloading required files from ModelScope: repo=%s profile=%s target=%s",
+        MODEL_REPO_ID,
+        profile_key,
+        model_path,
+    )
+    LOGGER.debug("ModelScope core allow_patterns=%s", core_patterns)
 
-    tmp_path = None
     try:
-        fd, tmp_path = tempfile.mkstemp(suffix=".tar.bz2")
-        os.close(fd)
+        with tempfile.TemporaryDirectory(prefix="qwen3-asr-ms-") as tmp_dir_name:
+            tmp_dir = Path(tmp_dir_name)
+            snapshot_download(
+                model_id=MODEL_REPO_ID,
+                revision="master",
+                allow_patterns=core_patterns,
+                local_dir=str(tmp_dir),
+            )
 
-        with urllib.request.urlopen(MODEL_URL, timeout=300) as response:
-            total_size = int(response.getheader("Content-Length", 0))
+            source_root = tmp_dir / profile_subdir
+            if not source_root.exists():
+                raise RuntimeError(f"Missing downloaded source directory: {source_root}")
 
-        downloaded = 0
-        last_report_percent = 0.0
+            for rel in CORE_REQUIRED_FILES:
+                src = source_root / rel
+                dst = model_path / rel
+                if not src.exists():
+                    raise RuntimeError(f"Required file missing from ModelScope snapshot: {src}")
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
 
-        with urllib.request.urlopen(MODEL_URL, timeout=300) as response, open(tmp_path, "wb") as out_file:
-            while True:
-                chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                if not chunk:
-                    break
-                out_file.write(chunk)
-                downloaded += len(chunk)
+            tokenizer_patterns = [
+                "tokenizer/vocab.json",
+                "tokenizer/merges.txt",
+                "tokenizer/tokenizer_config.json",
+            ]
+            LOGGER.debug("ModelScope tokenizer allow_patterns=%s", tokenizer_patterns)
+            snapshot_download(
+                model_id=MODEL_REPO_ID,
+                revision="master",
+                allow_patterns=tokenizer_patterns,
+                local_dir=str(tmp_dir),
+            )
 
-                if total_size > 0:
-                    current_percent = downloaded / total_size * 100
-                    if current_percent - last_report_percent >= PROGRESS_REPORT_INTERVAL * 100:
-                        if progress_callback is not None:
-                            progress_callback(downloaded, total_size, current_percent)
-                        last_report_percent = current_percent
-
-        if progress_callback is not None and total_size > 0:
-            progress_callback(downloaded, total_size, 100.0)
-
-        LOGGER.info("Download completed, extracting...")
-        with tarfile.open(tmp_path, "r:bz2") as tar:
-            tar.extractall(dest_dir)
+            if not _copy_tokenizer_from_snapshot(tmp_dir=tmp_dir, model_path=model_path):
+                raise RuntimeError(
+                    "Tokenizer files not found in snapshot root tokenizer directory"
+                )
 
         if not check_model_exists(model_path):
             raise RuntimeError("Model verification failed after extraction")
 
-        LOGGER.info("Model downloaded and extracted to: %s", model_path)
+        if progress_callback is not None:
+            progress_callback(1, 1, 100.0)
+
+        LOGGER.info("Model downloaded to: %s", model_path)
         return model_path
     except Exception as exc:
         LOGGER.error("Download failed: %s", exc)
         raise RuntimeError(f"Failed to download model: {exc}") from exc
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
 
 
 def format_size(size_bytes: int) -> str:

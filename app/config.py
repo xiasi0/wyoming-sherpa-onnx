@@ -17,19 +17,17 @@ def _env_str(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
-def _env_path(name: str, default: str) -> Path:
-    """Get path from environment variable."""
-    return Path(os.environ.get(name, default))
+def _default_models_root() -> Path:
+    return Path(__file__).resolve().parent.parent / "data" / "models"
 
 
-def _default_model_dir() -> Path:
-    """Default to the repository-local model directory."""
-    return (
-        Path(__file__).resolve().parent.parent
-        / "data"
-        / "models"
-        / "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
-    )
+def _model_dir_from_name(model_name: str) -> Path:
+    """Resolve default model directory from sherpa-onnx model name."""
+    normalized = model_name.lower()
+
+    if "sherpa-onnx-qwen3-asr-1.7b-int8" in normalized:
+        return _default_models_root() / "sherpa-onnx-qwen3-asr-1.7B-int8"
+    return _default_models_root() / "sherpa-onnx-qwen3-asr-0.6B-int8"
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -87,14 +85,14 @@ def parse_args() -> AppConfig:
     )
     parser.add_argument(
         "--model-name",
-        default=_env_str("MODEL_NAME", "Qwen3-ASR"),
+        default=_env_str("MODEL_NAME", "sherpa-onnx-qwen3-asr-0.6B-int8"),
         help="Model name exposed in Wyoming info.",
     )
     parser.add_argument(
         "--model-dir",
         type=Path,
-        default=_env_path("MODEL_DIR", str(_default_model_dir())),
-        help="Path to model directory.",
+        default=None,
+        help="Path to model directory. If not set, it is auto-selected from model-name.",
     )
     parser.add_argument(
         "--sample-rate",
@@ -142,13 +140,21 @@ def parse_args() -> AppConfig:
         auto_download = args.auto_download
     auto_download = auto_download and not args.no_auto_download
 
+    model_dir_env = os.environ.get("MODEL_DIR")
+    if args.model_dir is not None:
+        model_dir = args.model_dir.resolve()
+    elif model_dir_env:
+        model_dir = Path(model_dir_env).resolve()
+    else:
+        model_dir = _model_dir_from_name(args.model_name).resolve()
+
     return AppConfig(
         host=args.host,
         port=args.port,
         service_name=args.service_name,
         enable_zeroconf=enable_zeroconf,
         model_name=args.model_name,
-        model_dir=args.model_dir.resolve(),
+        model_dir=model_dir,
         sample_rate=args.sample_rate,
         num_threads=args.num_threads,
         auto_download=auto_download,

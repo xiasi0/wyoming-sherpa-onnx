@@ -60,7 +60,7 @@ async def main() -> None:
     )
     logger = logging.getLogger("wyoming-sherpa-onnx")
 
-    from app.downloader import MODEL_URL, check_model_exists, download_model
+    from app.downloader import check_model_exists, download_model, get_model_hint_url
 
     if not check_model_exists(cfg.model_dir):
         if cfg.auto_download:
@@ -68,21 +68,22 @@ async def main() -> None:
             _LAST_DOWNLOAD_LOG_PERCENT = -1
             try:
                 model_path = download_model(
-                    dest_dir=cfg.model_dir.parent,
+                    model_dir=cfg.model_dir,
+                    model_name=cfg.model_name,
                     progress_callback=_download_progress,
                 )
                 logger.info("Model downloaded to: %s", model_path)
                 cfg.model_dir = model_path
             except Exception as exc:
                 logger.error("Failed to download model: %s", exc)
-                logger.error("Please download model manually from:\n%s", MODEL_URL)
+                logger.error("Please download model manually from:\n%s", get_model_hint_url())
                 sys.exit(1)
         else:
             logger.error("Qwen3-ASR model directory is invalid: %s", cfg.model_dir)
             logger.error(
                 "The directory must contain ONNX model files and a tokenizer/tokens file."
             )
-            logger.error("Download URL:\n%s", MODEL_URL)
+            logger.error("Download URL:\n%s", get_model_hint_url())
             sys.exit(1)
     else:
         logger.info("Model verified: %s", cfg.model_dir)

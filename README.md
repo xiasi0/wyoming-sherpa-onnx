@@ -5,7 +5,7 @@
 ## 快速开始
 
 ```bash
-git clone <YOUR_REPO_URL> wyoming-sherpa-onnx
+git clone https://github.com/xiasi0/wyoming-sherpa-onnx.git
 cd wyoming-sherpa-onnx
 python3 -m venv .venv
 source .venv/bin/activate
@@ -44,7 +44,7 @@ data/models/
 ## Docker
 
 ```bash
-git clone <YOUR_REPO_URL> wyoming-sherpa-onnx
+git clone https://github.com/xiasi0/wyoming-sherpa-onnx.git
 cd wyoming-sherpa-onnx
 docker compose up -d --build
 docker compose logs -f

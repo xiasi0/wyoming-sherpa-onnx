@@ -51,7 +51,7 @@ docker compose logs -f
 ```
 
 - 容器内模型目录：`/data/models`
-- 宿主机挂载目录：`${HOME}/models`
+- 宿主机挂载目录：`${HOME}/data/models`
 
 ## 模型必要文件
 

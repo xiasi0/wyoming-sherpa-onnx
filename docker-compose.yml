@@ -10,13 +10,14 @@ services:
     ports:
       - "10300:10300"
     volumes:
-      - ${HOME}/models:/data/models:rw
+      - ${HOME}/data/models:/data/models:rw
     environment:
       - HOST=0.0.0.0
       - PORT=10300
       - SERVICE_NAME=wyoming-sherpa-onnx
       - ZEROCONF=false
       - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8
+      - MODEL_DIR=/data/models/sherpa-onnx-qwen3-asr-0.6B-int8
       - SAMPLE_RATE=16000
       - NUM_THREADS=2
       - AUTO_DOWNLOAD=true

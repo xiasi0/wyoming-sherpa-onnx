@@ -35,6 +35,7 @@ class WyomingAsrServer:
             model_dir=cfg.model_dir,
             sample_rate=cfg.sample_rate,
             num_threads=cfg.num_threads,
+            hotwords=cfg.hotwords,
         )
         self._info_cache: dict[str, Any] | None = None
         self._server: asyncio.AbstractServer | None = None

@@ -50,6 +50,7 @@ class AppConfig:
     num_threads: int
     auto_download: bool
     debug: bool
+    hotwords: str
 
 
 def parse_args() -> AppConfig:
@@ -122,6 +123,11 @@ def parse_args() -> AppConfig:
         action="store_true",
         help="Enable debug logging.",
     )
+    parser.add_argument(
+        "--hotwords",
+        default=_env_str("HOTWORDS", ""),
+        help="Global hotwords (comma-separated).",
+    )
     args = parser.parse_args()
 
     # --no-zeroconf 覆盖 --zeroconf
@@ -159,4 +165,5 @@ def parse_args() -> AppConfig:
         num_threads=args.num_threads,
         auto_download=auto_download,
         debug=args.debug,
+        hotwords=str(args.hotwords or "").strip(),
     )

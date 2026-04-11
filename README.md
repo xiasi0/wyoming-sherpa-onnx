@@ -19,6 +19,12 @@ python run_server.py
 python run_server.py --debug
 ```
 
+全局热词（逗号分隔）：
+
+```bash
+python run_server.py --hotwords "儿童房,台灯"
+```
+
 ## 模型规则
 
 - 默认模型名：`sherpa-onnx-qwen3-asr-0.6B-int8`
@@ -48,6 +54,12 @@ git clone https://github.com/xiasi0/wyoming-sherpa-onnx.git
 cd wyoming-sherpa-onnx
 docker compose up -d --build
 docker compose logs -f
+```
+
+Docker 启动时传全局热词（临时覆盖）：
+
+```bash
+HOTWORDS="儿童房,台灯" docker compose up -d --build
 ```
 
 - 容器内模型目录：`/data/models`

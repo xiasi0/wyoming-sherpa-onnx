@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,16 +24,25 @@ class Qwen3AsrStream:
 
 
 class Qwen3AsrEngine:
-    def __init__(self, model_dir: Path, sample_rate: int, num_threads: int) -> None:
+    def __init__(
+        self,
+        model_dir: Path,
+        sample_rate: int,
+        num_threads: int,
+        hotwords: str = "",
+    ) -> None:
         self.model_dir = model_dir
         self.sample_rate = sample_rate
         self.num_threads = num_threads
+        self.hotwords = hotwords.strip()
         self.recognizer = self._build_recognizer()
+        hotwords_count = len([x for x in self.hotwords.split(",") if x.strip()])
         LOGGER.debug(
-            "Initialized Qwen3-ASR engine: model_dir=%s sample_rate=%s num_threads=%s",
+            "Initialized Qwen3-ASR engine: model_dir=%s sample_rate=%s num_threads=%s hotwords_count=%s",
             self.model_dir,
             self.sample_rate,
             self.num_threads,
+            hotwords_count,
         )
 
         self._width_divisors = {
@@ -58,6 +68,21 @@ class Qwen3AsrEngine:
             "sample_rate": self.sample_rate,
             "debug": False,
         }
+        if self.hotwords:
+            supports_hotwords = False
+            try:
+                supports_hotwords = "hotwords" in inspect.signature(factory).parameters
+            except (TypeError, ValueError):
+                supports_hotwords = False
+
+            if supports_hotwords:
+                kwargs["hotwords"] = self.hotwords
+                LOGGER.info("Global hotwords enabled: %s", self.hotwords)
+            else:
+                LOGGER.warning(
+                    "Installed sherpa-onnx does not expose hotwords in from_qwen3_asr; ignore global hotwords."
+                )
+
         LOGGER.debug("Qwen3-ASR factory kwargs resolved: %s", sorted(kwargs.keys()))
         return factory(**kwargs)
 

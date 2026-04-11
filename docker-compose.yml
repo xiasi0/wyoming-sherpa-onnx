@@ -22,5 +22,6 @@ services:
       - NUM_THREADS=2
       - AUTO_DOWNLOAD=true
       - DEBUG=false
+      - HOTWORDS=
     labels:
       - "com.wyoming.asr=true"

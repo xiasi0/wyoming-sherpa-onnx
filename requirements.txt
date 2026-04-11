@@ -1,4 +1,4 @@
 numpy>=1.24
-sherpa-onnx==1.12.34
+sherpa-onnx==1.12.37
 zeroconf>=0.133.0
 modelscope>=1.35.3

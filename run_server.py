@@ -107,32 +107,37 @@ async def main() -> None:
     else:
         logger.info("Model verified: %s", cfg.model_dir)
 
-    if cfg.speaker_gate:
-        speaker_model_path = cfg.speaker_model_dir / cfg.speaker_model_file
-        if not check_speaker_model_exists(speaker_model_path):
-            if cfg.auto_download:
-                logger.info("Speaker model not found, starting auto-download...")
-                try:
-                    speaker_model_path = download_speaker_model(
-                        model_dir=cfg.speaker_model_dir,
-                        model_file=cfg.speaker_model_file,
-                        model_url=cfg.speaker_model_url,
-                    )
-                    logger.info("Speaker model downloaded to: %s", speaker_model_path)
-                except Exception as exc:
-                    logger.error("Failed to download speaker model: %s", exc)
-                    logger.error(
-                        "Please download speaker model manually from:\n%s",
-                        get_speaker_model_hint_url(cfg.speaker_model_url),
-                    )
-                    sys.exit(1)
-            else:
-                logger.error("Speaker model file is invalid: %s", speaker_model_path)
+    speaker_model_path = cfg.speaker_model_dir / cfg.speaker_model_file
+    if not check_speaker_model_exists(speaker_model_path):
+        if cfg.auto_download:
+            logger.info("Speaker model not found, starting auto-download...")
+            try:
+                speaker_model_path = download_speaker_model(
+                    model_dir=cfg.speaker_model_dir,
+                    model_file=cfg.speaker_model_file,
+                    model_url=cfg.speaker_model_url,
+                )
+                logger.info("Speaker model downloaded to: %s", speaker_model_path)
+            except Exception as exc:
+                logger.error("Failed to download speaker model: %s", exc)
                 logger.error(
                     "Please download speaker model manually from:\n%s",
                     get_speaker_model_hint_url(cfg.speaker_model_url),
                 )
                 sys.exit(1)
+        elif cfg.speaker_gate:
+            logger.error("Speaker model file is invalid: %s", speaker_model_path)
+            logger.error(
+                "Please download speaker model manually from:\n%s",
+                get_speaker_model_hint_url(cfg.speaker_model_url),
+            )
+            sys.exit(1)
+        else:
+            logger.warning(
+                "Speaker model missing but speaker gate is disabled and AUTO_DOWNLOAD=false; "
+                "skip pre-download: %s",
+                speaker_model_path,
+            )
 
     if cfg.denoise_enabled:
         denoise_model_path = cfg.denoise_model_dir / cfg.denoise_model_file

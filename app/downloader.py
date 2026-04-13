@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import urllib.request
 from pathlib import Path
-from typing import Callable
 
 from modelscope.hub.snapshot_download import snapshot_download
 
@@ -19,12 +19,6 @@ CORE_REQUIRED_FILES = (
     "conv_frontend.onnx",
     "encoder.int8.onnx",
     "decoder.int8.onnx",
-)
-
-TOKENIZER_REQUIRED_FILES = (
-    "tokenizer/vocab.json",
-    "tokenizer/merges.txt",
-    "tokenizer/tokenizer_config.json",
 )
 
 
@@ -87,6 +81,86 @@ def get_model_hint_url() -> str:
     return MODEL_REPO_PAGE
 
 
+def check_speaker_model_exists(model_file: Path) -> bool:
+    if not model_file.exists() or not model_file.is_file():
+        return False
+    if model_file.suffix.lower() != ".onnx":
+        LOGGER.debug("Speaker model is not ONNX: %s", model_file)
+        return False
+    return True
+
+
+def check_denoise_model_exists(model_file: Path) -> bool:
+    if not model_file.exists() or not model_file.is_file():
+        return False
+    if model_file.suffix.lower() != ".onnx":
+        LOGGER.debug("Denoise model is not ONNX: %s", model_file)
+        return False
+    return True
+
+
+def get_speaker_model_hint_url(model_url: str) -> str:
+    return model_url
+
+
+def download_speaker_model(model_dir: Path, model_file: str, model_url: str) -> Path:
+    model_dir = model_dir.resolve()
+    model_dir.mkdir(parents=True, exist_ok=True)
+    target_file = model_dir / model_file
+
+    if check_speaker_model_exists(target_file):
+        LOGGER.info("Speaker model already exists, skipping download: %s", target_file)
+        return target_file
+
+    LOGGER.info(
+        "Downloading speaker model: file=%s target=%s",
+        model_file,
+        target_file,
+    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="speaker-ms-") as tmp_dir_name:
+            tmp_dir = Path(tmp_dir_name)
+            tmp_file = tmp_dir / model_file
+            with urllib.request.urlopen(model_url, timeout=120) as resp, tmp_file.open("wb") as f:
+                shutil.copyfileobj(resp, f)
+            shutil.copy2(tmp_file, target_file)
+
+        if not check_speaker_model_exists(target_file):
+            raise RuntimeError("Speaker model verification failed after download")
+        LOGGER.info("Speaker model downloaded to: %s", target_file)
+        return target_file
+    except Exception as exc:
+        LOGGER.error("Speaker model download failed: %s", exc)
+        raise RuntimeError(f"Failed to download speaker model: {exc}") from exc
+
+
+def download_denoise_model(model_dir: Path, model_file: str, model_url: str) -> Path:
+    model_dir = model_dir.resolve()
+    model_dir.mkdir(parents=True, exist_ok=True)
+    target_file = model_dir / model_file
+
+    if check_denoise_model_exists(target_file):
+        LOGGER.info("Denoise model already exists, skipping download: %s", target_file)
+        return target_file
+
+    LOGGER.info("Downloading denoise model: file=%s target=%s", model_file, target_file)
+    try:
+        with tempfile.TemporaryDirectory(prefix="denoise-model-") as tmp_dir_name:
+            tmp_dir = Path(tmp_dir_name)
+            tmp_file = tmp_dir / model_file
+            with urllib.request.urlopen(model_url, timeout=120) as resp, tmp_file.open("wb") as f:
+                shutil.copyfileobj(resp, f)
+            shutil.copy2(tmp_file, target_file)
+
+        if not check_denoise_model_exists(target_file):
+            raise RuntimeError("Denoise model verification failed after download")
+        LOGGER.info("Denoise model downloaded to: %s", target_file)
+        return target_file
+    except Exception as exc:
+        LOGGER.error("Denoise model download failed: %s", exc)
+        raise RuntimeError(f"Failed to download denoise model: {exc}") from exc
+
+
 def _copy_tokenizer_from_snapshot(tmp_dir: Path, model_path: Path) -> bool:
     """Copy tokenizer assets from repository root tokenizer directory."""
     candidate = tmp_dir / "tokenizer"
@@ -108,7 +182,6 @@ def _copy_tokenizer_from_snapshot(tmp_dir: Path, model_path: Path) -> bool:
 def download_model(
     model_dir: Path,
     model_name: str = "",
-    progress_callback: Callable[[int, int, float], None] | None = None,
 ) -> Path:
     """Download only required files for the selected Qwen3-ASR model profile."""
     profile_key = select_model_profile_key(model_dir=model_dir, model_name=model_name)
@@ -171,9 +244,6 @@ def download_model(
 
         if not check_model_exists(model_path):
             raise RuntimeError("Model verification failed after extraction")
-
-        if progress_callback is not None:
-            progress_callback(1, 1, 100.0)
 
         LOGGER.info("Model downloaded to: %s", model_path)
         return model_path

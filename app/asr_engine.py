@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import inspect
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,12 @@ import numpy as np
 import sherpa_onnx
 
 LOGGER = logging.getLogger("wyoming-sherpa-onnx")
+_SCAFFOLD_PREFIX_RE = re.compile(
+    r"^\s*(?:language\s+\S+\s*)?<asr_text>\s*",
+    flags=re.IGNORECASE,
+)
+_DUPLICATED_PHRASE_RE = re.compile(r"(.{2,8})\1")
+_SENTENCE_RE = re.compile(r"[^。！？!?]+[。！？!?]?")
 
 
 @dataclass(slots=True)
@@ -90,22 +97,20 @@ class Qwen3AsrEngine:
         LOGGER.debug("Created offline ASR stream")
         return Qwen3AsrStream()
 
-    def feed_audio_to_stream(
-        self,
-        stream: Qwen3AsrStream,
-        pcm_bytes: bytes,
-        fmt: AudioFormat,
-    ) -> None:
+    def pcm_chunk_to_model_waveform(self, pcm_bytes: bytes, fmt: AudioFormat) -> np.ndarray:
         waveform = self._pcm_to_float32(pcm_bytes, fmt.width, fmt.channels)
         if fmt.rate != self.sample_rate:
             waveform = self._resample_linear(waveform, fmt.rate, self.sample_rate)
+        return waveform
+
+    def feed_waveform_to_stream(self, stream: Qwen3AsrStream, waveform: np.ndarray) -> None:
         if waveform.size == 0:
             return
-
-        stream.pcm_buffer.extend((np.clip(waveform, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes())
+        stream.pcm_buffer.extend(
+            (np.clip(waveform, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+        )
         LOGGER.debug(
-            "Accepted audio chunk: input_bytes=%s waveform_samples=%s buffered_pcm=%s",
-            len(pcm_bytes),
+            "Accepted waveform: waveform_samples=%s buffered_pcm=%s",
             waveform.size,
             len(stream.pcm_buffer),
         )
@@ -121,7 +126,7 @@ class Qwen3AsrEngine:
 
         recognizer_stream.accept_waveform(self.sample_rate, waveform)
         self.recognizer.decode_stream(recognizer_stream)
-        final_text = self._extract_text(recognizer_stream).strip()
+        final_text = self._sanitize_text(self._extract_text(recognizer_stream))
         LOGGER.debug("Final transcript text: %r", final_text)
         return final_text
 
@@ -141,6 +146,39 @@ class Qwen3AsrEngine:
                 return str(result.get("text", ""))
 
         return ""
+
+    def _sanitize_text(self, text: str) -> str:
+        cleaned = _SCAFFOLD_PREFIX_RE.sub("", text or "").strip()
+        # Collapse accidental repeated phrases caused by segmented decoding.
+        for _ in range(2):
+            next_cleaned = _DUPLICATED_PHRASE_RE.sub(r"\1", cleaned)
+            if next_cleaned == cleaned:
+                break
+            cleaned = next_cleaned
+        return self._collapse_prefix_sentences(cleaned)
+
+    def _collapse_prefix_sentences(self, text: str) -> str:
+        parts = [m.group(0).strip() for m in _SENTENCE_RE.finditer(text) if m.group(0).strip()]
+        if len(parts) < 2:
+            return text
+
+        reduced: list[str] = []
+        for part in parts:
+            core = part.rstrip("。！？!?").strip()
+            if not core:
+                continue
+            if reduced:
+                prev = reduced[-1]
+                prev_core = prev.rstrip("。！？!?").strip()
+                # Prefer longer sentence when adjacent sentences are prefix-related.
+                if core.startswith(prev_core) and len(core) > len(prev_core):
+                    reduced[-1] = part
+                    continue
+                if prev_core.startswith(core):
+                    continue
+            reduced.append(part)
+
+        return "".join(reduced).strip() if reduced else text
 
     def _pcm_to_float32(self, pcm: bytes, width: int, channels: int) -> np.ndarray:
         dtype = self._dtype_map.get(width)

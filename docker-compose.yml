@@ -6,22 +6,20 @@ services:
     image: wyoming-sherpa-onnx:latest
     container_name: wyoming-sherpa-onnx
     restart: unless-stopped
-    user: root
     ports:
       - "10300:10300"
     volumes:
-      - ${HOME}/data/models:/data/models:rw
+      - ${HOME}/data:/data:rw
     environment:
       - HOST=0.0.0.0
       - PORT=10300
-      - SERVICE_NAME=wyoming-sherpa-onnx
-      - ZEROCONF=false
       - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8
-      - MODEL_DIR=/data/models/sherpa-onnx-qwen3-asr-0.6B-int8
-      - SAMPLE_RATE=16000
-      - NUM_THREADS=2
-      - AUTO_DOWNLOAD=true
-      - DEBUG=false
       - HOTWORDS=
+      - SPEAKER_GATE=false
+      - SPEAKER_THRESHOLD=0.40
+      - SPEAKER_MODEL_NAME=wespeaker-zh-cnceleb-resnet34
+      - SPEAKER_REFERENCE_DIR=/data/speaker_refs
+      - DENOISE=true
+      - DENOISE_MODEL_NAME=gtcrn-simple
     labels:
       - "com.wyoming.asr=true"

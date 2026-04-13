@@ -6,12 +6,17 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 from .asr_engine import AudioFormat, Qwen3AsrEngine
 from .config import AppConfig
+from .denoise import GtcrnEnhancer
 from .protocol import read_message, write_message
+from .speaker_gate import SpeakerGate
 
 LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 _MAX_AUDIO_SECONDS = 30.0
+_SPEAKER_GATE_WINDOW_SECONDS = 0.8
 
 
 def _is_disconnect_error(exc: BaseException) -> bool:
@@ -26,6 +31,12 @@ class SessionState:
     chunk_count: int
     total_bytes: int
     over_limit: bool
+    detected_segments: int
+    accepted_segments: int
+    rejected_segments: int
+    accepted_samples: int
+    gate_pending_waveform: np.ndarray
+    gate_pending_start_idx: int
 
 
 class WyomingAsrServer:
@@ -37,6 +48,21 @@ class WyomingAsrServer:
             num_threads=cfg.num_threads,
             hotwords=cfg.hotwords,
         )
+        self.speaker_gate: SpeakerGate | None = None
+        if cfg.speaker_gate:
+            self.speaker_gate = SpeakerGate(
+                model_path=cfg.speaker_model_dir / cfg.speaker_model_file,
+                reference_wavs=cfg.speaker_reference_wavs,
+                threshold=cfg.speaker_threshold,
+                num_threads=max(1, cfg.num_threads),
+                reference_root=cfg.speaker_reference_dir,
+            )
+        self.denoiser: GtcrnEnhancer | None = None
+        if cfg.denoise_enabled:
+            self.denoiser = GtcrnEnhancer(
+                model_path=cfg.denoise_model_dir / cfg.denoise_model_file,
+                num_threads=max(1, cfg.num_threads),
+            )
         self._info_cache: dict[str, Any] | None = None
         self._server: asyncio.AbstractServer | None = None
 
@@ -50,6 +76,12 @@ class WyomingAsrServer:
             chunk_count=0,
             total_bytes=0,
             over_limit=False,
+            detected_segments=0,
+            accepted_segments=0,
+            rejected_segments=0,
+            accepted_samples=0,
+            gate_pending_waveform=np.empty((0,), dtype=np.float32),
+            gate_pending_start_idx=0,
         )
 
         try:
@@ -78,6 +110,14 @@ class WyomingAsrServer:
                     state.chunk_count = 0
                     state.total_bytes = 0
                     state.over_limit = False
+                    state.detected_segments = 0
+                    state.accepted_segments = 0
+                    state.rejected_segments = 0
+                    state.accepted_samples = 0
+                    state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
+                    state.gate_pending_start_idx = 0
+                    if self.denoiser is not None:
+                        self.denoiser.reset()
                     LOGGER.debug(
                         "[%s] Audio stream started: %dHz, %d-bit, %d channels",
                         peer,
@@ -100,7 +140,12 @@ class WyomingAsrServer:
                                 audio_duration,
                             )
                             continue
-                        self.engine.feed_audio_to_stream(state.stream, msg.payload, state.audio_format)
+                        waveform = self.engine.pcm_chunk_to_model_waveform(
+                            msg.payload, state.audio_format
+                        )
+                        if self.denoiser is not None:
+                            waveform = self.denoiser.enhance(waveform, self.cfg.sample_rate)
+                        self._process_segments(peer, state, [waveform])
                         state.chunk_count += 1
                         state.total_bytes += len(msg.payload)
                         LOGGER.debug(
@@ -123,6 +168,12 @@ class WyomingAsrServer:
                             bytes_per_sample = state.audio_format.width * state.audio_format.channels
                             audio_duration = state.total_bytes / (bytes_per_sample * state.audio_format.rate)
 
+                        if self.denoiser is not None:
+                            tail = self.denoiser.flush()
+                            if tail.size > 0:
+                                self._process_segments(peer, state, [tail])
+                        self._flush_pending_speaker_gate(peer, state, force=True)
+
                         start_time = time.time()
                         text = self.engine.finish_stream(state.stream)
                         infer_time = time.time() - start_time
@@ -131,13 +182,29 @@ class WyomingAsrServer:
                         state.stream = None
 
                         LOGGER.info(
-                            "[%s] Recognition completed: audio=%.2fs, inference=%.3fs, RTF=%.2f, result=\"%s\"",
+                            "[%s] Recognition completed: audio=%.2fs, inference=%.3fs, RTF=%.2f, "
+                            "segments=%d, speaker_accept=%d, speaker_reject=%d, asr_fed=%.2fs, result=\"%s\"",
                             peer,
                             audio_duration,
                             infer_time,
                             rtf,
+                            state.detected_segments,
+                            state.accepted_segments,
+                            state.rejected_segments,
+                            state.accepted_samples / float(self.cfg.sample_rate),
                             text if text else "(silence)",
                         )
+                        if state.accepted_segments == 0 and state.rejected_segments > 0:
+                            LOGGER.info(
+                                "[%s] Empty transcript because all detected speech segments "
+                                "were rejected by speaker gate.",
+                                peer,
+                            )
+                        elif state.accepted_segments == 0:
+                            LOGGER.info(
+                                "[%s] Empty transcript because no audio segments passed to ASR.",
+                                peer,
+                            )
 
                     await write_message(
                         writer,
@@ -149,6 +216,8 @@ class WyomingAsrServer:
                     )
                     LOGGER.debug("[%s] Sent transcript: %r", peer, text)
                     state.over_limit = False
+                    state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
+                    state.gate_pending_start_idx = 0
                 else:
                     LOGGER.debug("Ignoring unsupported message type: %s", msg.msg_type)
         except EOFError:
@@ -209,6 +278,130 @@ class WyomingAsrServer:
                 ],
             }
         return self._info_cache
+
+    def _process_segments(
+        self,
+        peer: str,
+        state: SessionState,
+        segments: list,
+    ) -> None:
+        if state.stream is None:
+            return
+        for segment in segments:
+            state.detected_segments += 1
+            if self.speaker_gate is None:
+                self.engine.feed_waveform_to_stream(state.stream, segment)
+                state.accepted_segments += 1
+                state.accepted_samples += len(segment)
+                seg_sec = len(segment) / float(self.cfg.sample_rate)
+                LOGGER.info(
+                    "[%s] Segment #%d fed to ASR: dur=%.2fs samples=%d accepted=%d rejected=%d asr_fed=%.2fs",
+                    peer,
+                    state.detected_segments,
+                    seg_sec,
+                    len(segment),
+                    state.accepted_segments,
+                    state.rejected_segments,
+                    state.accepted_samples / float(self.cfg.sample_rate),
+                )
+                continue
+
+            if state.gate_pending_waveform.size == 0:
+                state.gate_pending_start_idx = state.detected_segments
+                state.gate_pending_waveform = np.ascontiguousarray(segment, dtype=np.float32)
+            else:
+                state.gate_pending_waveform = np.concatenate(
+                    (state.gate_pending_waveform, segment)
+                )
+            self._flush_pending_speaker_gate(peer, state, force=False)
+
+    def _flush_pending_speaker_gate(
+        self, peer: str, state: SessionState, force: bool
+    ) -> None:
+        if self.speaker_gate is None:
+            return
+        if state.stream is None:
+            return
+        if state.gate_pending_waveform.size == 0:
+            return
+
+        gate_window = max(1, int(self.cfg.sample_rate * _SPEAKER_GATE_WINDOW_SECONDS))
+
+        while state.gate_pending_waveform.size >= gate_window:
+            seg = np.ascontiguousarray(state.gate_pending_waveform[:gate_window], dtype=np.float32)
+            self._eval_gate_segment(peer, state, seg, float(self.cfg.speaker_threshold))
+            state.gate_pending_waveform = state.gate_pending_waveform[gate_window:]
+            state.gate_pending_start_idx = state.detected_segments
+
+        if force and state.gate_pending_waveform.size > 0:
+            seg = np.ascontiguousarray(state.gate_pending_waveform, dtype=np.float32)
+            seg_sec = seg.size / float(self.cfg.sample_rate)
+            effective_threshold = float(self.cfg.speaker_threshold)
+            if seg_sec < _SPEAKER_GATE_WINDOW_SECONDS:
+                # Tail segment is shorter than fixed window; slightly relax threshold.
+                relax = (1.0 - max(0.0, seg_sec / _SPEAKER_GATE_WINDOW_SECONDS)) * 0.10
+                effective_threshold = max(0.20, effective_threshold - relax)
+            self._eval_gate_segment(peer, state, seg, effective_threshold)
+            state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
+            state.gate_pending_start_idx = 0
+
+    def _eval_gate_segment(
+        self, peer: str, state: SessionState, segment: np.ndarray, threshold: float
+    ) -> None:
+        if self.speaker_gate is None or state.stream is None:
+            return
+
+        start_idx = state.gate_pending_start_idx or 1
+        end_idx = state.detected_segments
+        effective_threshold = float(threshold)
+        if start_idx <= 1:
+            # Relax first segment slightly to avoid missing weak wake-up/command onset.
+            effective_threshold = max(0.20, effective_threshold - 0.05)
+
+        accepted, similarity, speaker_id = self.speaker_gate.accepts_waveform(
+            segment,
+            self.cfg.sample_rate,
+            threshold=effective_threshold,
+        )
+        samples = int(segment.size)
+        seg_sec = samples / float(self.cfg.sample_rate)
+
+        if not accepted:
+            state.rejected_segments += 1
+            LOGGER.info(
+                "[%s] Fixed segment #%d-%d rejected: dur=%.2fs samples=%d similarity=%.3f threshold=%.3f "
+                "matched=%s accepted=%d rejected=%d",
+                peer,
+                start_idx,
+                end_idx,
+                seg_sec,
+                samples,
+                similarity,
+                effective_threshold,
+                speaker_id or "-",
+                state.accepted_segments,
+                state.rejected_segments,
+            )
+            return
+
+        self.engine.feed_waveform_to_stream(state.stream, segment)
+        state.accepted_segments += 1
+        state.accepted_samples += samples
+        LOGGER.info(
+            "[%s] Fixed segment #%d-%d fed to ASR: dur=%.2fs samples=%d similarity=%.3f threshold=%.3f "
+            "matched=%s accepted=%d rejected=%d asr_fed=%.2fs",
+            peer,
+            start_idx,
+            end_idx,
+            seg_sec,
+            samples,
+            similarity,
+            effective_threshold,
+            speaker_id or "-",
+            state.accepted_segments,
+            state.rejected_segments,
+            state.accepted_samples / float(self.cfg.sample_rate),
+        )
 
     async def run(self) -> None:
         self._server = await asyncio.start_server(self.handle_client, self.cfg.host, self.cfg.port)

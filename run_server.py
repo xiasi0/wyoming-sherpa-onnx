@@ -5,6 +5,7 @@ import logging
 import signal
 import socket
 import sys
+from pathlib import Path
 
 from app.config import parse_args
 from app.discovery import WyomingDiscovery
@@ -25,34 +26,7 @@ def _resolve_advertise_host(bind_host: str) -> str:
         probe.close()
 
 
-_LAST_DOWNLOAD_LOG_PERCENT = -1
-
-
-def _download_progress(downloaded: int, total: int, percent: float) -> None:
-    """Emit Docker-friendly download progress logs."""
-    global _LAST_DOWNLOAD_LOG_PERCENT
-
-    from app.downloader import format_size
-
-    if total <= 0:
-        return
-
-    percent_bucket = int(percent)
-    if percent_bucket == _LAST_DOWNLOAD_LOG_PERCENT and percent < 100.0:
-        return
-
-    _LAST_DOWNLOAD_LOG_PERCENT = percent_bucket
-    logging.getLogger("wyoming-sherpa-onnx").info(
-        "Model download progress: %.1f%% (%s/%s)",
-        percent,
-        format_size(downloaded),
-        format_size(total),
-    )
-
-
 async def main() -> None:
-    global _LAST_DOWNLOAD_LOG_PERCENT
-
     cfg = parse_args()
     logging.basicConfig(
         level=logging.DEBUG if cfg.debug else logging.INFO,
@@ -60,17 +34,62 @@ async def main() -> None:
     )
     logger = logging.getLogger("wyoming-sherpa-onnx")
 
-    from app.downloader import check_model_exists, download_model, get_model_hint_url
+    default_speaker_refs_dir = cfg.speaker_reference_dir
+    if cfg.speaker_gate:
+        default_speaker_refs_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Speaker reference directory: %s", default_speaker_refs_dir)
+        root_wavs = sorted(default_speaker_refs_dir.glob("*.wav"))
+        if root_wavs:
+            logger.warning(
+                "Found %d wav(s) directly under %s; they are ignored. "
+                "Please place files under subdirectories like %s/<speaker_id>/*.wav.",
+                len(root_wavs),
+                default_speaker_refs_dir,
+                default_speaker_refs_dir,
+            )
+
+    if cfg.speaker_gate and not cfg.speaker_reference_wavs:
+        logger.error(
+            "Speaker gate is enabled but no reference wavs provided. "
+            "Put wavs under %s/<speaker_id>/*.wav or use --speaker-reference-wavs "
+            "with files in speaker subdirectories.",
+            default_speaker_refs_dir,
+        )
+        sys.exit(1)
+    if cfg.speaker_gate:
+        speaker_ids: set[str] = set()
+        for p in cfg.speaker_reference_wavs:
+            resolved = p.resolve()
+            try:
+                rel = resolved.relative_to(cfg.speaker_reference_dir)
+                speaker_ids.add(rel.parts[0] if len(rel.parts) >= 2 else "default")
+            except ValueError:
+                speaker_ids.add(resolved.parent.name or "default")
+        logger.info(
+            "Speaker gate references loaded (%d wavs, %d speakers): %s",
+            len(cfg.speaker_reference_wavs),
+            len(speaker_ids),
+            ", ".join(str(p) for p in cfg.speaker_reference_wavs),
+        )
+
+    from app.downloader import (
+        check_denoise_model_exists,
+        check_model_exists,
+        check_speaker_model_exists,
+        download_denoise_model,
+        download_model,
+        download_speaker_model,
+        get_model_hint_url,
+        get_speaker_model_hint_url,
+    )
 
     if not check_model_exists(cfg.model_dir):
         if cfg.auto_download:
             logger.info("Model not found, starting auto-download...")
-            _LAST_DOWNLOAD_LOG_PERCENT = -1
             try:
                 model_path = download_model(
                     model_dir=cfg.model_dir,
                     model_name=cfg.model_name,
-                    progress_callback=_download_progress,
                 )
                 logger.info("Model downloaded to: %s", model_path)
                 cfg.model_dir = model_path
@@ -87,6 +106,60 @@ async def main() -> None:
             sys.exit(1)
     else:
         logger.info("Model verified: %s", cfg.model_dir)
+
+    if cfg.speaker_gate:
+        speaker_model_path = cfg.speaker_model_dir / cfg.speaker_model_file
+        if not check_speaker_model_exists(speaker_model_path):
+            if cfg.auto_download:
+                logger.info("Speaker model not found, starting auto-download...")
+                try:
+                    speaker_model_path = download_speaker_model(
+                        model_dir=cfg.speaker_model_dir,
+                        model_file=cfg.speaker_model_file,
+                        model_url=cfg.speaker_model_url,
+                    )
+                    logger.info("Speaker model downloaded to: %s", speaker_model_path)
+                except Exception as exc:
+                    logger.error("Failed to download speaker model: %s", exc)
+                    logger.error(
+                        "Please download speaker model manually from:\n%s",
+                        get_speaker_model_hint_url(cfg.speaker_model_url),
+                    )
+                    sys.exit(1)
+            else:
+                logger.error("Speaker model file is invalid: %s", speaker_model_path)
+                logger.error(
+                    "Please download speaker model manually from:\n%s",
+                    get_speaker_model_hint_url(cfg.speaker_model_url),
+                )
+                sys.exit(1)
+
+    if cfg.denoise_enabled:
+        denoise_model_path = cfg.denoise_model_dir / cfg.denoise_model_file
+        if not check_denoise_model_exists(denoise_model_path):
+            if cfg.auto_download:
+                logger.info("Denoise model not found, starting auto-download...")
+                try:
+                    denoise_model_path = download_denoise_model(
+                        model_dir=cfg.denoise_model_dir,
+                        model_file=cfg.denoise_model_file,
+                        model_url=cfg.denoise_model_url,
+                    )
+                    logger.info("Denoise model downloaded to: %s", denoise_model_path)
+                except Exception as exc:
+                    logger.error("Failed to download denoise model: %s", exc)
+                    logger.error(
+                        "Please download denoise model manually from:\n%s",
+                        cfg.denoise_model_url,
+                    )
+                    sys.exit(1)
+            else:
+                logger.error("Denoise model file is invalid: %s", denoise_model_path)
+                logger.error(
+                    "Please download denoise model manually from:\n%s",
+                    cfg.denoise_model_url,
+                )
+                sys.exit(1)
 
     discovery = None
     if cfg.enable_zeroconf:

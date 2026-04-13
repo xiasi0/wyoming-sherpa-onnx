@@ -6,6 +6,7 @@ services:
     image: wyoming-sherpa-onnx:latest
     container_name: wyoming-sherpa-onnx
     restart: unless-stopped
+    user: "0:0"
     ports:
       - "10300:10300"
     volumes:

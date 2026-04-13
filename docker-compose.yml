@@ -9,7 +9,8 @@ services:
     ports:
       - "10300:10300"
     volumes:
-      - ${HOME}/data:/data:rw
+      - ${HOME}/data/models:/app/data/models:rw
+      - ${HOME}/data/speaker_refs:/data/speaker_refs:rw
     environment:
       - HOST=0.0.0.0
       - PORT=10300

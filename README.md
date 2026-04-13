@@ -85,7 +85,7 @@ docker compose logs -f
 
 说明：
 - `SPEAKER_MODEL_FILE` 为可选覆盖项
-- 声纹模型目录默认按 `MODEL_NAME` 推导：`data/models/<asr_model_dir>/speaker`
+- 声纹模型目录默认固定：`data/models/speaker`
 
 ### 3) 降噪模型
 
@@ -94,7 +94,7 @@ docker compose logs -f
 
 说明：
 - `DENOISE_MODEL_FILE` 为可选覆盖项
-- 降噪模型目录默认按 `MODEL_NAME` 推导：`data/models/<asr_model_dir>/denoise`
+- 降噪模型目录默认固定：`data/models/denoise`
 
 ## 多说话人注册规则
 
@@ -147,13 +147,13 @@ ASR / 声纹 / 降噪三类模型采用统一逻辑：
 | 声纹阈值 | `--speaker-threshold` | `SPEAKER_THRESHOLD` | `0.40` |
 | 声纹模型名 | `--speaker-model-name` | `SPEAKER_MODEL_NAME` | `wespeaker-zh-cnceleb-resnet34` |
 | 声纹模型文件覆盖 | `--speaker-model-file` | `SPEAKER_MODEL_FILE` | 空 |
-| 声纹模型目录覆盖 | `--speaker-model-dir` | `SPEAKER_MODEL_DIR` | 自动按 `MODEL_NAME` 映射 |
+| 声纹模型目录覆盖 | `--speaker-model-dir` | `SPEAKER_MODEL_DIR` | `data/models/speaker` |
 | 声纹参考目录 | `--speaker-reference-dir` | `SPEAKER_REFERENCE_DIR` | `data/speaker_refs` |
 | 声纹参考文件覆盖 | `--speaker-reference-wavs` | `SPEAKER_REFERENCE_WAVS` | 空（自动扫描目录） |
 | 降噪开关 | `--denoise/--no-denoise` | `DENOISE` | `true` |
 | 降噪模型名 | `--denoise-model-name` | `DENOISE_MODEL_NAME` | `gtcrn-simple` |
 | 降噪模型文件覆盖 | `--denoise-model-file` | `DENOISE_MODEL_FILE` | 空 |
-| 降噪模型目录覆盖 | 无 | `DENOISE_MODEL_DIR` | 自动按 `MODEL_NAME` 映射 |
+| 降噪模型目录覆盖 | 无 | `DENOISE_MODEL_DIR` | `data/models/denoise` |
 
 ## 上游引用
 

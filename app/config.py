@@ -35,11 +35,13 @@ def _model_dir_from_name(model_name: str) -> Path:
 
 
 def _speaker_model_dir_from_name(model_name: str) -> Path:
-    return _model_dir_from_name(model_name) / "speaker"
+    _ = model_name
+    return _default_models_root() / "speaker"
 
 
 def _denoise_model_dir_from_name(model_name: str) -> Path:
-    return _model_dir_from_name(model_name) / "denoise"
+    _ = model_name
+    return _default_models_root() / "denoise"
 
 
 _SPEAKER_MODEL_NAME_TO_FILE = {

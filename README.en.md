@@ -81,7 +81,7 @@ Select with `SPEAKER_MODEL_NAME` (or `--speaker-model-name`):
 
 Notes:
 - `SPEAKER_MODEL_FILE` is an optional override.
-- Default speaker model directory is derived from `MODEL_NAME`: `data/models/<asr_model_dir>/speaker`
+- Default speaker model directory is fixed: `data/models/speaker`
 
 ### 3) Denoise Models
 
@@ -90,7 +90,7 @@ Select with `DENOISE_MODEL_NAME` (or `--denoise-model-name`):
 
 Notes:
 - `DENOISE_MODEL_FILE` is an optional override.
-- Default denoise model directory is derived from `MODEL_NAME`: `data/models/<asr_model_dir>/denoise`
+- Default denoise model directory is fixed: `data/models/denoise`
 
 ## Multi-Speaker Enrollment
 
@@ -134,13 +134,13 @@ Important:
 | Speaker threshold | `--speaker-threshold` | `SPEAKER_THRESHOLD` | `0.40` |
 | Speaker model name | `--speaker-model-name` | `SPEAKER_MODEL_NAME` | `wespeaker-zh-cnceleb-resnet34` |
 | Speaker model file override | `--speaker-model-file` | `SPEAKER_MODEL_FILE` | empty |
-| Speaker model dir override | `--speaker-model-dir` | `SPEAKER_MODEL_DIR` | derived from `MODEL_NAME` |
+| Speaker model dir override | `--speaker-model-dir` | `SPEAKER_MODEL_DIR` | `data/models/speaker` |
 | Speaker refs root | `--speaker-reference-dir` | `SPEAKER_REFERENCE_DIR` | `data/speaker_refs` |
 | Speaker refs file list override | `--speaker-reference-wavs` | `SPEAKER_REFERENCE_WAVS` | empty (auto scan) |
 | Denoise | `--denoise/--no-denoise` | `DENOISE` | `true` |
 | Denoise model name | `--denoise-model-name` | `DENOISE_MODEL_NAME` | `gtcrn-simple` |
 | Denoise model file override | `--denoise-model-file` | `DENOISE_MODEL_FILE` | empty |
-| Denoise model dir override | N/A | `DENOISE_MODEL_DIR` | derived from `MODEL_NAME` |
+| Denoise model dir override | N/A | `DENOISE_MODEL_DIR` | `data/models/denoise` |
 
 ## Upstream References
 

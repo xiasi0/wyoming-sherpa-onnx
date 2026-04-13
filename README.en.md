@@ -54,8 +54,9 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-Default mount:
-- `${HOME}/data -> /data`
+Default mounts:
+- `${HOME}/data/models -> /app/data/models`
+- `${HOME}/data/speaker_refs -> /data/speaker_refs`
 
 ## Model and Directory Rules
 

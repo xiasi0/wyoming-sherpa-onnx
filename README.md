@@ -59,7 +59,8 @@ docker compose logs -f
 ```
 
 默认挂载：
-- `${HOME}/data -> /data`
+- `${HOME}/data/models -> /app/data/models`
+- `${HOME}/data/speaker_refs -> /data/speaker_refs`
 
 ## 模型与目录规则
 

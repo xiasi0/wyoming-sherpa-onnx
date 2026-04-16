@@ -17,6 +17,7 @@ from .speaker_gate import SpeakerGate
 LOGGER = logging.getLogger("wyoming-sherpa-onnx")
 _MAX_AUDIO_SECONDS = 30.0
 _SPEAKER_GATE_WINDOW_SECONDS = 0.8
+_SPEAKER_GATE_HYSTERESIS_DELTA = 0.06
 
 
 def _is_disconnect_error(exc: BaseException) -> bool:
@@ -37,6 +38,19 @@ class SessionState:
     accepted_samples: int
     gate_pending_waveform: np.ndarray
     gate_pending_start_idx: int
+    gate_segments: list["GateSegment"]
+    gate_active: bool
+
+
+@dataclass(slots=True)
+class GateSegment:
+    start_idx: int
+    end_idx: int
+    waveform: np.ndarray
+    accepted: bool
+    similarity: float
+    threshold: float
+    speaker_id: str | None
 
 
 class WyomingAsrServer:
@@ -82,6 +96,8 @@ class WyomingAsrServer:
             accepted_samples=0,
             gate_pending_waveform=np.empty((0,), dtype=np.float32),
             gate_pending_start_idx=0,
+            gate_segments=[],
+            gate_active=False,
         )
 
         try:
@@ -116,6 +132,8 @@ class WyomingAsrServer:
                     state.accepted_samples = 0
                     state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
                     state.gate_pending_start_idx = 0
+                    state.gate_segments = []
+                    state.gate_active = False
                     if self.denoiser is not None:
                         self.denoiser.reset()
                     LOGGER.debug(
@@ -218,6 +236,8 @@ class WyomingAsrServer:
                     state.over_limit = False
                     state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
                     state.gate_pending_start_idx = 0
+                    state.gate_segments = []
+                    state.gate_active = False
                 else:
                     LOGGER.debug("Ignoring unsupported message type: %s", msg.msg_type)
         except EOFError:
@@ -344,6 +364,69 @@ class WyomingAsrServer:
             self._eval_gate_segment(peer, state, seg, effective_threshold)
             state.gate_pending_waveform = np.empty((0,), dtype=np.float32)
             state.gate_pending_start_idx = 0
+        if force:
+            self._flush_selected_gate_segments(peer, state)
+
+    def _flush_selected_gate_segments(self, peer: str, state: SessionState) -> None:
+        if state.stream is None or self.speaker_gate is None:
+            return
+        if not state.gate_segments:
+            return
+
+        accepted_positions = [i for i, item in enumerate(state.gate_segments) if item.accepted]
+        if not accepted_positions:
+            LOGGER.info(
+                "[%s] Speaker gate selection: no accepted fixed segments; nothing fed to ASR.",
+                peer,
+            )
+            state.gate_segments = []
+            return
+
+        first_pos = accepted_positions[0]
+        last_pos = accepted_positions[-1]
+        span_start = max(0, first_pos - 1)
+        span_end = min(len(state.gate_segments) - 1, last_pos + 1)
+
+        selected_positions = set(accepted_positions)
+        selected_positions.update(range(span_start, span_end + 1))
+        ordered_positions = sorted(selected_positions)
+
+        fed_samples = 0
+        for pos in ordered_positions:
+            item = state.gate_segments[pos]
+            self.engine.feed_waveform_to_stream(state.stream, item.waveform)
+            fed_samples += int(item.waveform.size)
+            state.accepted_samples += int(item.waveform.size)
+            LOGGER.info(
+                "[%s] Fixed segment #%d-%d selected for ASR: dur=%.2fs samples=%d accepted=%d "
+                "similarity=%.3f threshold=%.3f matched=%s asr_fed=%.2fs",
+                peer,
+                item.start_idx,
+                item.end_idx,
+                item.waveform.size / float(self.cfg.sample_rate),
+                item.waveform.size,
+                1 if item.accepted else 0,
+                item.similarity,
+                item.threshold,
+                item.speaker_id or "-",
+                state.accepted_samples / float(self.cfg.sample_rate),
+            )
+
+        LOGGER.info(
+            "[%s] Speaker gate selection summary: total=%d accepted=%d selected=%d "
+            "first_accept_pos=%d last_accept_pos=%d span=[%d,%d] fed=%.2fs",
+            peer,
+            len(state.gate_segments),
+            len(accepted_positions),
+            len(ordered_positions),
+            first_pos + 1,
+            last_pos + 1,
+            span_start + 1,
+            span_end + 1,
+            fed_samples / float(self.cfg.sample_rate),
+        )
+
+        state.gate_segments = []
 
     def _eval_gate_segment(
         self, peer: str, state: SessionState, segment: np.ndarray, threshold: float
@@ -353,16 +436,20 @@ class WyomingAsrServer:
 
         start_idx = state.gate_pending_start_idx or 1
         end_idx = state.detected_segments
-        effective_threshold = float(threshold)
+        enter_threshold = float(threshold)
         if start_idx <= 1:
             # Relax first segment slightly to avoid missing weak wake-up/command onset.
-            effective_threshold = max(0.20, effective_threshold - 0.05)
+            enter_threshold = max(0.20, enter_threshold - 0.05)
+        keep_threshold = max(0.20, enter_threshold - _SPEAKER_GATE_HYSTERESIS_DELTA)
+        use_keep = state.gate_active
+        effective_threshold = keep_threshold if use_keep else enter_threshold
 
         accepted, similarity, speaker_id = self.speaker_gate.accepts_waveform(
             segment,
             self.cfg.sample_rate,
             threshold=effective_threshold,
         )
+        state.gate_active = accepted
         samples = int(segment.size)
         seg_sec = samples / float(self.cfg.sample_rate)
 
@@ -370,7 +457,7 @@ class WyomingAsrServer:
             state.rejected_segments += 1
             LOGGER.info(
                 "[%s] Fixed segment #%d-%d rejected: dur=%.2fs samples=%d similarity=%.3f threshold=%.3f "
-                "matched=%s accepted=%d rejected=%d",
+                "mode=%s matched=%s accepted=%d rejected=%d",
                 peer,
                 start_idx,
                 end_idx,
@@ -378,18 +465,28 @@ class WyomingAsrServer:
                 samples,
                 similarity,
                 effective_threshold,
+                "keep" if use_keep else "enter",
                 speaker_id or "-",
                 state.accepted_segments,
                 state.rejected_segments,
             )
+            state.gate_segments.append(
+                GateSegment(
+                    start_idx=start_idx,
+                    end_idx=end_idx,
+                    waveform=np.ascontiguousarray(segment, dtype=np.float32),
+                    accepted=False,
+                    similarity=float(similarity),
+                    threshold=effective_threshold,
+                    speaker_id=speaker_id,
+                )
+            )
             return
 
-        self.engine.feed_waveform_to_stream(state.stream, segment)
         state.accepted_segments += 1
-        state.accepted_samples += samples
         LOGGER.info(
-            "[%s] Fixed segment #%d-%d fed to ASR: dur=%.2fs samples=%d similarity=%.3f threshold=%.3f "
-            "matched=%s accepted=%d rejected=%d asr_fed=%.2fs",
+            "[%s] Fixed segment #%d-%d accepted by gate: dur=%.2fs samples=%d similarity=%.3f "
+            "threshold=%.3f mode=%s matched=%s accepted=%d rejected=%d",
             peer,
             start_idx,
             end_idx,
@@ -397,10 +494,21 @@ class WyomingAsrServer:
             samples,
             similarity,
             effective_threshold,
+            "keep" if use_keep else "enter",
             speaker_id or "-",
             state.accepted_segments,
             state.rejected_segments,
-            state.accepted_samples / float(self.cfg.sample_rate),
+        )
+        state.gate_segments.append(
+            GateSegment(
+                start_idx=start_idx,
+                end_idx=end_idx,
+                waveform=np.ascontiguousarray(segment, dtype=np.float32),
+                accepted=True,
+                similarity=float(similarity),
+                threshold=effective_threshold,
+                speaker_id=speaker_id,
+            )
         )
 
     async def run(self) -> None:

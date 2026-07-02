@@ -16,6 +16,7 @@ services:
       - HOST=0.0.0.0
       - PORT=10300
       - MODEL_NAME=sherpa-onnx-qwen3-asr-0.6B-int8
+      - NUM_THREADS=2
       - HOTWORDS=
       - SPEAKER_GATE=false
       - SPEAKER_THRESHOLD=0.40

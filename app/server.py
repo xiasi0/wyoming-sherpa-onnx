@@ -308,13 +308,15 @@ class WyomingAsrServer:
         if state.stream is None:
             return
         for segment in segments:
+            if segment.size == 0:
+                continue
             state.detected_segments += 1
             if self.speaker_gate is None:
                 self.engine.feed_waveform_to_stream(state.stream, segment)
                 state.accepted_segments += 1
                 state.accepted_samples += len(segment)
                 seg_sec = len(segment) / float(self.cfg.sample_rate)
-                LOGGER.info(
+                LOGGER.debug(
                     "[%s] Segment #%d fed to ASR: dur=%.2fs samples=%d accepted=%d rejected=%d asr_fed=%.2fs",
                     peer,
                     state.detected_segments,
